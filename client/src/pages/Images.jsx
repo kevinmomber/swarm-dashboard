@@ -2,6 +2,8 @@ import { useState, useRef } from 'react';
 import { api } from '../api.js';
 import { useApi } from '../components/useApi.js';
 import { Badge, Modal, bytes, ago, short, useToast } from '../components/ui.jsx';
+import TabBar from '../components/TabBar.jsx';
+import BuilderPanel from '../components/BuilderPanel.jsx';
 
 function download(path) {
   const a = document.createElement('a');
@@ -9,7 +11,7 @@ function download(path) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
-export default function Images() {
+function Library() {
   const { data, error, loading, reload } = useApi('/images', { poll: 10000 });
   const { data: nodesData } = useApi('/nodes', { poll: 0 });
   const toast = useToast();
@@ -141,8 +143,8 @@ export default function Images() {
 
   return (
     <>
-      <div className="page-head">
-        <div><h1>Images</h1><div className="sub">Alle Images im Swarm, je Node</div></div>
+      <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+        <div className="sub">Alle Images im Swarm, je Node</div>
         <button className="btn" onClick={reload}>↻ Aktualisieren</button>
       </div>
 
@@ -337,6 +339,24 @@ export default function Images() {
           )}
         </Modal>
       )}
+    </>
+  );
+}
+
+export default function Images() {
+  const [tab, setTab] = useState('library');
+  return (
+    <>
+      <div className="page-head">
+        <div><h1>Images</h1><div className="sub">Image-Bibliothek und integrierter Builder (CI/CD)</div></div>
+      </div>
+      <TabBar
+        tabs={[{ k: 'library', label: 'Library' }, { k: 'builder', label: 'Builder' }]}
+        active={tab}
+        onChange={setTab}
+      />
+      {tab === 'library' && <Library />}
+      {tab === 'builder' && <BuilderPanel />}
     </>
   );
 }

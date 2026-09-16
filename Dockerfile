@@ -17,12 +17,13 @@ RUN npm install --omit=dev --no-audit --no-fund
 FROM node:22-alpine
 WORKDIR /app
 
-# docker CLI is needed for `docker stack deploy`; git for the Git→Compose feature.
-# Also patch OS packages (openssl etc.) and drop the global npm CLI + corepack —
-# they are build tools never executed at runtime (CMD launches `node`; the app
-# only ever spawns the `git`/`docker` CLIs). This removes the CVE findings that
-# live in the bundled npm toolchain (tar, pacote, sigstore, brace-expansion, …).
-RUN apk add --no-cache docker-cli docker-cli-compose git \
+# docker CLI is needed for `docker stack deploy` and `docker build` (the Builder
+# tab); buildx enables BuildKit builds with layer cache; git for the
+# Git→Compose feature. Also patch OS packages (openssl etc.) and drop the global
+# npm CLI + corepack — they are build tools never executed at runtime (CMD
+# launches `node`; the app only ever spawns the `git`/`docker` CLIs). This
+# removes the CVE findings that live in the bundled npm toolchain.
+RUN apk add --no-cache docker-cli docker-cli-compose docker-cli-buildx git \
  && apk upgrade --no-cache --available \
  && rm -rf /usr/local/lib/node_modules/npm \
            /usr/local/lib/node_modules/corepack \

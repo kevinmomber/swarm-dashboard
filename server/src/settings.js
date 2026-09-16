@@ -76,6 +76,11 @@ const DEFAULTS = {
   monitorLog: [], // [{ at, level, target, message }]
   registries: [], // [{ id, name, url, username, password }]
   git: [], // [{ id, name, url, branch, composePath, token }]
+  builder: {
+    // Saved Dockerfiles for the Builder tab and recent build history.
+    dockerfiles: [], // [{ id, name, content, updatedAt }]
+    history: [], // [{ id, tag, startedAt, finishedAt, status, pushed, error }]
+  },
 };
 
 let cache = null;

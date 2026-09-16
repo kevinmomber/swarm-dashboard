@@ -24,6 +24,7 @@ import registryRouter from './routes/registry.js';
 import gitRouter from './routes/git.js';
 import securityRouter from './routes/security.js';
 import pkiRouter from './routes/pki.js';
+import builderRouter from './routes/builder.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
 import { resolveRunningContainer } from './serviceops.js';
@@ -55,6 +56,7 @@ api.use('/registries', registryRouter);
 api.use('/git', gitRouter);
 api.use('/security', securityRouter);
 api.use('/pki', pkiRouter);
+api.use('/builder', builderRouter);
 api.use('/', clusterRouter); // /containers /images
 api.use('/', miscRouter); // /networks /volumes /secrets /configs
 app.use('/api', api);

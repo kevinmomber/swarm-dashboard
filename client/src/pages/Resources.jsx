@@ -432,7 +432,85 @@ function ConfigAdd({ onClose, onDone }) {
   );
 }
 
+function SecretAdd({ onClose, onDone }) {
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [text, setText] = useState('');
+  const [labels, setLabels] = useState('');
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const onFile = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    if (!name) setName(f.name);
+    const buf = await f.arrayBuffer();
+    let bin = ''; const b = new Uint8Array(buf);
+    for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+    setText(`\u0000B64:${btoa(bin)}`); // store exact bytes as base64 payload
+    toast(`„${f.name}" geladen (${bytes(buf.byteLength)})`);
+  };
+
+  const parseLabels = () => {
+    const out = {};
+    for (const line of labels.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const eq = t.indexOf('=');
+      if (eq <= 0) continue;
+      out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+    }
+    return out;
+  };
+
+  const create = async () => {
+    if (!name.trim()) { toast('Name erforderlich', 'err'); return; }
+    const isFile = text.startsWith('\u0000B64:');
+    if (!isFile && !text) { toast('Wert erforderlich', 'err'); return; }
+    setBusy(true);
+    try {
+      const body = { name: name.trim(), labels: parseLabels() };
+      if (isFile) body.dataB64 = text.slice(5);
+      else body.data = text;
+      await api.post('/secrets', body);
+      toast(`Secret „${name}" angelegt`); onDone(); onClose();
+    } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
+  };
+
+  const isFile = text.startsWith('\u0000B64:');
+
+  return (
+    <Modal wide title="🔑 Secret anlegen" onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>Abbrechen</button>
+        <button className="btn primary" disabled={busy} onClick={create}>＋ Anlegen</button>
+      </>}>
+      <div className="field">
+        <label>Name <span style={{ color: 'var(--red)' }}>*</span></label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="z. B. db_password oder tls_key" autoFocus />
+      </div>
+      <div className="field">
+        <label>Wert <span style={{ color: 'var(--red)' }}>*</span></label>
+        {isFile
+          ? <div className="help">Datei geladen (binär/als Bytes). Zum manuellen Eintippen „Datei verwerfen" wählen.</div>
+          : <textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder="Geheimwert hier eingeben…" />}
+      </div>
+      <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={onFile} />
+      <button className="btn" onClick={() => fileRef.current?.click()}>⭱ Aus Datei importieren</button>
+      {isFile && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => setText('')}>Datei verwerfen</button>}
+      <div className="field" style={{ marginTop: 14 }}>
+        <label>Labels (optional, je Zeile KEY=VALUE)</label>
+        <textarea rows={2} value={labels} onChange={(e) => setLabels(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder={'env=production\nteam=backend'} />
+      </div>
+      <div className="help" style={{ marginTop: 8 }}>
+        Secrets werden von Docker Swarm verschlüsselt (im Raft-Log) gespeichert. Der Wert kann nach dem Anlegen nicht mehr ausgelesen werden — Secrets sind unveränderlich; zum „Bearbeiten" ein neues Secret anlegen und Services darauf umstellen.
+      </div>
+    </Modal>
+  );
+}
+
 export default function Resources() {
+  const toast = useToast();
   const [tab, setTab] = useState('networks');
   const { data, error, loading, reload } = useApi(`/${tab}`, { poll: 10000 });
   const [netDetail, setNetDetail] = useState(null);
@@ -445,6 +523,10 @@ export default function Resources() {
   const [bindQ, setBindQ] = useState('');
   const [cfgDetail, setCfgDetail] = useState(null);
   const [cfgAdd, setCfgAdd] = useState(false);
+  const [secAdd, setSecAdd] = useState(false);
+  const [secQ, setSecQ] = useState('');
+  const [secDelChk, setSecDelChk] = useState(false);
+  const [secDel, setSecDel] = useState(null); // secret row pending delete
 
   const stackCol = (row) => (row.stack ? <Badge kind="muted">{row.stack}</Badge> : '–');
 
@@ -519,6 +601,15 @@ export default function Resources() {
             <option value="caution">bedingt</option>
             <option value="skip">nicht empfohlen</option>
           </select>
+        </div>
+      )}
+
+      {tab === 'secrets' && (
+        <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+          <input style={{ maxWidth: 280 }} value={secQ} onChange={(e) => setSecQ(e.target.value)} placeholder="🔍 Secret nach Name filtern…" />
+          {secQ && <button className="btn sm" onClick={() => setSecQ('')}>✕</button>}
+          <div className="spacer" />
+          <button className="btn primary" onClick={() => setSecAdd(true)}>＋ Secret anlegen</button>
         </div>
       )}
 
@@ -609,16 +700,21 @@ export default function Resources() {
             )}
             {tab === 'secrets' && (
               <>
-                <thead><tr><th>Name</th><th>ID</th><th>Erstellt</th><th>Stack</th></tr></thead>
+                <thead><tr><th>Name</th><th>ID</th><th>Erstellt</th><th>Stack</th><th>Aktion</th></tr></thead>
                 <tbody>
-                  {data.map((r) => (
-                    <tr key={r.id}>
-                      <td style={{ fontWeight: 600 }}>{r.name}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{short(r.id)}</td>
-                      <td style={{ color: 'var(--text-dim)' }}>{ago(r.createdAt)}</td>
-                      <td>{stackCol(r)}</td>
-                    </tr>
-                  ))}
+                  {data
+                    .filter((r) => !secQ || (r.name || '').toLowerCase().includes(secQ.toLowerCase()))
+                    .map((r) => (
+                      <tr key={r.id}>
+                        <td style={{ fontWeight: 600 }}>{r.name}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{short(r.id)}</td>
+                        <td style={{ color: 'var(--text-dim)' }}>{ago(r.createdAt)}</td>
+                        <td>{stackCol(r)}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn sm danger" onClick={() => { setSecDelChk(false); setSecDel(r); }}>Löschen</button>
+                        </td>
+                      </tr>
+                    ))}
                 </tbody>
               </>
             )}
@@ -652,6 +748,25 @@ export default function Resources() {
       {migRow && <MigrationModal row={migRow} onClose={() => setMigRow(null)} onDone={reload} />}
       {cfgDetail && <ConfigDetail cfg={cfgDetail} onClose={() => setCfgDetail(null)} onDeleted={reload} />}
       {cfgAdd && <ConfigAdd onClose={() => setCfgAdd(false)} onDone={reload} />}
+      {secAdd && <SecretAdd onClose={() => setSecAdd(false)} onDone={reload} />}
+      {secDel && (
+        <Modal title="Secret löschen" onClose={() => setSecDel(null)}
+          footer={<>
+            <button className="btn" onClick={() => setSecDel(null)}>Abbrechen</button>
+            <button className="btn danger" disabled={!secDelChk} onClick={async () => {
+              try { await api.del(`/secrets/${secDel.id}`); toast(`Secret „${secDel.name}" gelöscht`); setSecDel(null); reload(); }
+              catch (e) { toast(e.message, 'err'); }
+            }}>Endgültig löschen</button>
+          </>}>
+          <div className="help" style={{ marginBottom: 12 }}>
+            Das Secret <b className="mono">{secDel.name}</b> wird entfernt. Wird es noch von einem Service verwendet, schlägt das Löschen fehl.
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={secDelChk} onChange={(e) => setSecDelChk(e.target.checked)} />
+            Ich bestätige, dass ich dieses Secret endgültig löschen möchte.
+          </label>
+        </Modal>
+      )}
     </>
   );
 }

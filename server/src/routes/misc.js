@@ -202,6 +202,35 @@ router.get('/secrets', async (req, res, next) => {
   }
 });
 
+// Create a new secret. Body: { name, dataB64 | data, labels }.
+// Note: a secret value can never be read back — this only writes it.
+router.post('/secrets', async (req, res, next) => {
+  try {
+    await requireManager();
+    const { name, dataB64, data, labels } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name erforderlich' });
+    const b64 = dataB64 != null ? dataB64 : Buffer.from(String(data ?? ''), 'utf8').toString('base64');
+    if (!b64) return res.status(400).json({ error: 'Wert erforderlich' });
+    const created = await docker.createSecret({ Name: name, Data: b64, Labels: labels || {} });
+    res.json({ ok: true, id: created.id || created.ID || null });
+  } catch (err) {
+    const msg = /already exists|name conflicts/i.test(err.message || '') ? 'Ein Secret mit diesem Namen existiert bereits' : err.message;
+    res.status(400).json({ error: msg });
+  }
+});
+
+// Delete a secret (fails if still referenced by a service).
+router.delete('/secrets/:id', async (req, res, next) => {
+  try {
+    await requireManager();
+    await docker.getSecret(req.params.id).remove();
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = /in use/i.test(err.message || '') ? 'Secret wird noch von einem Service verwendet' : err.message;
+    res.status(409).json({ error: msg });
+  }
+});
+
 router.get('/configs', async (req, res, next) => {
   try {
     await requireManager();

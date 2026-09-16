@@ -1,0 +1,46 @@
+{
+  "name": "swarm-dashboard-server",
+  "version": "1.16.0",
+  "description": "Backend for the Docker Swarm dashboard (Dockhand-like)",
+  "author": "Swarm Dashboard",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.2",
+    "express": "^4.19.2",
+    "js-yaml": "^4.1.0",
+    "mqtt": "^5.10.1",
+    "node-cron": "^3.0.3",
+    "node-forge": "^1.3.1",
+    "nodemailer": "^9.0.0",
+    "ws": "^8.18.0"
+  },
+  "overrides": {
+    "qs": "^6.16.0",
+    "uuid": "^11.0.0"
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

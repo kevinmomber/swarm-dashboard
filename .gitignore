@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+
+# Runtime data (settings.json, PKI keys, pki.db, backup history) — never commit
+data/
+**/data/
+
+# Exported image tarballs
+*.tar
+
+# Editor/OS noise
+.vscode/
+.idea/
+Thumbs.db

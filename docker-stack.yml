@@ -1,0 +1,63 @@
+# Deploy on a Swarm manager:  docker stack deploy -c docker-stack.yml swarmdash
+version: "3.8"
+
+services:
+  dashboard:
+    image: swarm-dashboard:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount the manager's Docker socket so the app can talk to the Swarm API.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist settings + backup history.
+      - swarmdash_data:/data
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      # Node-agent discovery (matches the agent's network alias below).
+      - AGENT_SERVICE=swarmdash-agent
+      - AGENT_PORT=9787
+    networks:
+      - swarmdash
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: start-first
+
+  # Global node agent — one per node — reports real host CPU/RAM/disk.
+  agent:
+    image: swarm-dashboard:latest
+    command: ["node", "server/src/agent.js"]
+    environment:
+      - AGENT_PORT=9787
+      - HOST_ROOT=/host
+      - NODE_ID={{.Node.ID}}
+      - NODE_HOSTNAME={{.Node.Hostname}}
+    volumes:
+      # Read-only host root so the agent can read /proc and stat the host FS.
+      - /:/host:ro
+      # Local Docker socket — required to broker console (exec) and export (commit)
+      # for containers on this node. Grants root-equivalent access on the node.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      swarmdash:
+        aliases:
+          - swarmdash-agent
+    deploy:
+      mode: global
+      endpoint_mode: dnsrr
+      restart_policy:
+        condition: on-failure
+
+networks:
+  swarmdash:
+    driver: overlay
+    attachable: true
+
+volumes:
+  swarmdash_data:

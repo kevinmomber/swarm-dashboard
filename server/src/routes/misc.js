@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
-import { listVolumes, volumeUsage, volumeRemove, volumeDuplicate, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
+import { listVolumes, volumeUsage, volumeRemove, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
 
 const router = Router();
 
@@ -162,6 +162,29 @@ router.post('/volumes/duplicate', async (req, res, next) => {
   res.end();
 });
 
+/* --- volume content export (download tar) / import (upload tar) --- */
+router.get('/volumes/export', async (req, res, next) => {
+  try {
+    const { nodeId, name } = req.query;
+    if (!name) return res.status(400).json({ error: 'name erforderlich' });
+    const stream = await volumeExport(nodeId, name);
+    const fn = String(name).replace(/[^\w.-]/g, '_');
+    res.setHeader('Content-Type', 'application/x-tar');
+    res.setHeader('Content-Disposition', `attachment; filename="${fn}.tar"`);
+    stream.on('error', (e) => { if (!res.headersSent) res.status(500).json({ error: e.message }); else res.destroy(e); });
+    stream.pipe(res);
+  } catch (err) { next(err); }
+});
+router.post('/volumes/import', async (req, res, next) => {
+  try {
+    const { nodeId, name } = req.query;
+    if (!name) return res.status(400).json({ error: 'name erforderlich' });
+    // Raw tar arrives as the request body stream (Content-Type application/x-tar,
+    // so express.json does not consume it).
+    const result = await volumeImport(nodeId, name, req);
+    res.json(result);
+  } catch (err) { next(err); }
+});
 /* --- volume file browser (exec into a helper that mounts the volume) --- */
 router.get('/volumes/fs/list', async (req, res, next) => {
   try {

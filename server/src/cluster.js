@@ -497,6 +497,49 @@ export async function volumeDuplicate({ srcNodeId, name, dstNodeId, newName, onS
   return { ok: true, name: newName, srcNodeId: srcNodeId || localId, dstNodeId: dstNodeId || localId };
 }
 
+/**
+ * Export a volume's contents as a tar stream (Docker archive; entries prefixed
+ * "vol/"). Works for the local (manager) node or a remote node via its agent.
+ * The returned stream can be piped straight to an HTTP response for download.
+ */
+export async function volumeExport(nodeId, name) {
+  await requireManager();
+  if (!name) throw new Error('name erforderlich');
+  const info = await docker.info();
+  const localId = info.Swarm?.NodeID || null;
+  const local = !nodeId || nodeId === localId;
+  if (local) return await exportVolume(name);
+  const base = await agentBaseForNode(nodeId);
+  if (!base) throw new Error('Node nicht erreichbar (Agent erforderlich)');
+  const r = await fetch(`${base}/volume-export?name=${encodeURIComponent(name)}`);
+  if (!r.ok || !r.body) throw new Error(`Export fehlgeschlagen (HTTP ${r.status})`);
+  return Readable.fromWeb(r.body);
+}
+
+/**
+ * Import a tar stream (Docker archive with "vol/"-prefixed entries, as produced
+ * by volumeExport) into a volume, creating it if needed. Local or remote node.
+ */
+export async function volumeImport(nodeId, name, tarStream) {
+  await requireManager();
+  if (!name) throw new Error('name erforderlich');
+  if (!/^[\w][\w.-]*$/.test(name)) throw new Error('Ungültiger Volumename');
+  const info = await docker.info();
+  const localId = info.Swarm?.NodeID || null;
+  const local = !nodeId || nodeId === localId;
+  if (local) { await importVolume(name, tarStream); return { ok: true, name }; }
+  const base = await agentBaseForNode(nodeId);
+  if (!base) throw new Error('Node nicht erreichbar (Agent erforderlich)');
+  const r = await fetch(`${base}/volume-import?name=${encodeURIComponent(name)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-tar' }, body: tarStream, duplex: 'half',
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    throw new Error(e.error || `Import fehlgeschlagen (HTTP ${r.status})`);
+  }
+  return { ok: true, name };
+}
+
 /* --------------------------- bind analysis ------------------------- */
 
 /** Read-only migratability assessment for a bind mount source (host path). */

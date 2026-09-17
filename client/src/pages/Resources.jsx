@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { api, postSSE } from '../api.js';
+import { api, postSSE, getToken } from '../api.js';
 import { useApi } from '../components/useApi.js';
 import { Badge, short, ago, bytes, Modal, useToast } from '../components/ui.jsx';
 import TabBar from '../components/TabBar.jsx';
@@ -92,6 +92,9 @@ function VolumeDetail({ vol, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [dupProg, setDupProg] = useState(null); // { total, bytes, done }
   const [vtab, setVtab] = useState('overview');
+  const impRef = useRef(null);
+  const [impBusy, setImpBusy] = useState(false);
+  const [impChk, setImpChk] = useState(false);
 
   useEffect(() => {
     api.get(`/volumes/usage?nodeId=${encodeURIComponent(vol.nodeId || '')}&name=${encodeURIComponent(vol.name)}`)
@@ -124,6 +127,37 @@ function VolumeDetail({ vol, onClose, onChanged }) {
       toast(`Volume nach „${dupName}" auf ${dst?.hostname || 'Node'} dupliziert`);
       onChanged(); onClose();
     } catch (e) { toast(e.message, 'err'); setDupProg(null); } finally { setBusy(false); }
+  };
+
+  const exportVol = () => {
+    const a = document.createElement('a');
+    a.href = `/api/volumes/export?nodeId=${encodeURIComponent(vol.nodeId || '')}&name=${encodeURIComponent(vol.name)}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`Export von „${vol.name}" wird vorbereitet…`);
+  };
+
+  const importVol = async (file) => {
+    if (!file) return;
+    setImpBusy(true);
+    try {
+      const t = getToken();
+      const res = await fetch(
+        `/api/volumes/import?nodeId=${encodeURIComponent(vol.nodeId || '')}&name=${encodeURIComponent(vol.name)}`,
+        {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/x-tar' }, t ? { Authorization: 'Bearer ' + t } : {}),
+          body: file,
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      toast(`Inhalt aus „${file.name}" in Volume „${vol.name}" importiert`);
+      setImpChk(false);
+      onChanged();
+    } catch (e) { toast(e.message, 'err'); } finally {
+      setImpBusy(false);
+      if (impRef.current) impRef.current.value = '';
+    }
   };
 
   const del = async () => {
@@ -188,6 +222,30 @@ function VolumeDetail({ vol, onClose, onChanged }) {
               </div>
             );
           })()}
+
+          {hr}
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Inhalt exportieren / importieren</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+            <button className="btn" disabled={busy || impBusy} onClick={exportVol}>⭳ Export (.tar)</button>
+            <input
+              ref={impRef}
+              type="file"
+              accept=".tar,application/x-tar"
+              style={{ display: 'none' }}
+              onChange={(e) => { const f = e.target.files?.[0]; importVol(f); }}
+            />
+            <button className="btn" disabled={busy || impBusy || !impChk} onClick={() => impRef.current?.click()}>
+              {impBusy ? 'Importiere…' : '⭱ Import (.tar)'}
+            </button>
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', marginBottom: 4 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={impChk} disabled={impBusy} onChange={(e) => setImpChk(e.target.checked)} />
+            Ich bestätige den Import — vorhandene Dateien im Volume „{vol.name}" können dabei überschrieben werden.
+          </label>
+          <div className="help" style={{ marginBottom: 4 }}>
+            Export lädt den kompletten Volume-Inhalt als Tar-Archiv herunter. Import entpackt ein zuvor
+            exportiertes Archiv wieder in dieses Volume (Helfer-Container mit alpine; auf entfernten Nodes muss der Agent laufen).
+          </div>
 
           {hr}
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Volume löschen</div>

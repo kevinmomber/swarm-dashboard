@@ -14,6 +14,9 @@ const COLUMNS = [
 
 const distinct = (arr, key) => [...new Set(arr.map((t) => t[key]).filter((v) => v != null && v !== ''))].sort();
 
+// Terminal task states (Swarm) — these are "beendete" tasks that clutter the list.
+const TERMINAL = new Set(['complete', 'shutdown', 'failed', 'rejected', 'orphaned', 'remove']);
+
 export default function Tasks() {
   const { data, error, loading, reload } = useApi('/tasks', { poll: 5000 });
   const [q, setQ] = useState('');
@@ -21,6 +24,7 @@ export default function Tasks() {
   const [image, setImage] = useState('all');
   const [desired, setDesired] = useState('all');
   const [state, setState] = useState('all');
+  const [hideTerminated, setHideTerminated] = useState(false);
   const [sort, setSort] = useState({ key: 'timestamp', dir: 'desc' });
 
   const tasks = data || [];
@@ -28,10 +32,12 @@ export default function Tasks() {
   const images = useMemo(() => distinct(tasks, 'image'), [tasks]);
   const desiredStates = useMemo(() => distinct(tasks, 'desiredState'), [tasks]);
   const states = useMemo(() => distinct(tasks, 'state'), [tasks]);
+  const terminatedCount = useMemo(() => tasks.filter((t) => TERMINAL.has((t.state || '').toLowerCase())).length, [tasks]);
 
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase();
     const filtered = tasks.filter((t) => {
+      if (hideTerminated && TERMINAL.has((t.state || '').toLowerCase())) return false;
       if (node !== 'all' && t.node !== node) return false;
       if (image !== 'all' && t.image !== image) return false;
       if (desired !== 'all' && t.desiredState !== desired) return false;
@@ -48,7 +54,7 @@ export default function Tasks() {
       if (key === 'timestamp') { return ((new Date(av).getTime() || 0) - (new Date(bv).getTime() || 0)) * mul; }
       return (av || '').toString().localeCompare((bv || '').toString(), 'de', { numeric: true }) * mul;
     });
-  }, [tasks, q, node, image, desired, state, sort]);
+  }, [tasks, q, node, image, desired, state, hideTerminated, sort]);
 
   const toggleSort = (key) => setSort((s) => (s.key === key
     ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
@@ -62,7 +68,19 @@ export default function Tasks() {
     <>
       <div className="page-head">
         <div><h1>Tasks</h1><div className="sub">Einzelne Container-Instanzen der Services</div></div>
-        <button className="btn" onClick={reload}>↻ Aktualisieren</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            className="btn"
+            onClick={() => setHideTerminated((v) => !v)}
+            disabled={!hideTerminated && terminatedCount === 0}
+            title={hideTerminated
+              ? 'Beendete Tasks wieder einblenden'
+              : 'Beendete Tasks (Shutdown/Failed/…) aus der Liste ausblenden'}
+          >
+            {hideTerminated ? '↩ Beendete einblenden' : `🧹 Liste leeren${terminatedCount ? ` (${terminatedCount})` : ''}`}
+          </button>
+          <button className="btn" onClick={reload}>↻ Aktualisieren</button>
+        </div>
       </div>
 
       <div className="toolbar" style={{ flexWrap: 'wrap' }}>
@@ -97,7 +115,10 @@ export default function Tasks() {
 
       {rows.length > 0 && (
         <>
-          <div className="help" style={{ margin: '0 0 6px 2px' }}>{rows.length} von {tasks.length} Tasks</div>
+          <div className="help" style={{ margin: '0 0 6px 2px' }}>
+            {rows.length} von {tasks.length} Tasks
+            {hideTerminated && terminatedCount > 0 && <> · {terminatedCount} beendete ausgeblendet</>}
+          </div>
           <div className="table-wrap">
             <table>
               <thead>

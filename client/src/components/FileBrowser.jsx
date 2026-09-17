@@ -8,7 +8,6 @@ const parentOf = (p) => { if (p === '/' || !p) return '/'; const i = p.lastIndex
 /** File browser inside a container/service (exec-based) or a named volume. */
 export default function FileBrowser({ nodeId, containerId, volume, editable = true }) {
   const toast = useToast();
-  const editDownOnOverlay = useRef(false);
   const [path, setPath] = useState('/');
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -160,9 +159,7 @@ export default function FileBrowser({ nodeId, containerId, volume, editable = tr
         </div>
       )}
       {edit && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(1,4,9,.6)', zIndex: 60, display: 'grid', placeItems: 'center', padding: 24 }}
-          onMouseDown={(e) => { editDownOnOverlay.current = e.target === e.currentTarget; }}
-          onMouseUp={(e) => { const s = editDownOnOverlay.current; editDownOnOverlay.current = false; if (s && e.target === e.currentTarget) setEdit(null); }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(1,4,9,.6)', zIndex: 60, display: 'grid', placeItems: 'center', padding: 24 }}>
           <div style={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 10, width: '100%', maxWidth: 820, maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <b className="mono" style={{ fontSize: 13 }}>{edit.path}</b>

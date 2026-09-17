@@ -1,4 +1,4 @@
-import { useState, useCallback, createContext, useContext } from 'react';
+import { useState, useCallback, useRef, useEffect, createContext, useContext } from 'react';
 
 /* ---------- Toast ---------- */
 const ToastCtx = createContext(() => {});
@@ -20,9 +20,28 @@ export function ToastProvider({ children }) {
 
 /* ---------- Modal ---------- */
 export function Modal({ title, onClose, children, footer, wide }) {
+  // Nur schließen, wenn Maus-Druck UND Loslassen direkt auf dem Overlay
+  // passieren. Verhindert, dass eine Textmarkierung, die im Fenster beginnt
+  // und außerhalb endet (oder umgekehrt), den Dialog schließt.
+  const downOnOverlay = useRef(false);
+
+  useEffect(() => {
+    if (!onClose) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const handleDown = (e) => { downOnOverlay.current = e.target === e.currentTarget; };
+  const handleUp = (e) => {
+    const started = downOnOverlay.current;
+    downOnOverlay.current = false;
+    if (started && e.target === e.currentTarget && onClose) onClose();
+  };
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className={`modal ${wide ? 'wide' : ''}`} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onMouseDown={handleDown} onMouseUp={handleUp}>
+      <div className={`modal ${wide ? 'wide' : ''}`}>
         <div className="modal-head">
           <h3>{title}</h3>
           <button className="x-btn" onClick={onClose}>×</button>

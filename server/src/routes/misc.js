@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
-import { listVolumes, volumeUsage, volumeRemove, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
+import { listVolumes, volumeUsage, volumeRemove, volumeCreate, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
 
 const router = Router();
 
@@ -140,6 +140,13 @@ router.post('/volumes/action', async (req, res, next) => {
     const { nodeId, name, action, force } = req.body || {};
     if (action !== 'remove') return res.status(400).json({ error: 'Unbekannte Aktion' });
     res.json(await volumeRemove(nodeId, name, force));
+  } catch (err) { next(err); }
+});
+router.post('/volumes/create', async (req, res, next) => {
+  try {
+    const { nodeId, name, driver, labels, driverOpts } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name erforderlich' });
+    res.json(await volumeCreate(nodeId, { name, driver, labels, driverOpts }));
   } catch (err) { next(err); }
 });
 router.post('/volumes/duplicate', async (req, res, next) => {

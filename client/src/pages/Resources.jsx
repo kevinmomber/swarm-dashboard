@@ -567,6 +567,91 @@ function SecretAdd({ onClose, onDone }) {
   );
 }
 
+function VolumeAdd({ onClose, onDone }) {
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [nodes, setNodes] = useState([]);
+  const [node, setNode] = useState('');
+  const [driver, setDriver] = useState('local');
+  const [opts, setOpts] = useState('');
+  const [labels, setLabels] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get('/nodes').then((ns) => {
+      setNodes(ns || []);
+      const mgr = (ns || []).find((n) => n.leader) || (ns || []).find((n) => n.role === 'manager') || (ns || [])[0];
+      if (mgr) setNode(mgr.id);
+    }).catch(() => {});
+  }, []);
+
+  const parseKv = (text) => {
+    const out = {};
+    for (const line of text.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const eq = t.indexOf('=');
+      if (eq <= 0) continue;
+      out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+    }
+    return out;
+  };
+
+  const create = async () => {
+    if (!name.trim()) { toast('Name erforderlich', 'err'); return; }
+    if (!/^[\w][\w.-]*$/.test(name.trim())) { toast('Ungültiger Volumename (nur Buchstaben, Ziffern, . _ -)', 'err'); return; }
+    setBusy(true);
+    try {
+      await api.post('/volumes/create', {
+        nodeId: node || undefined,
+        name: name.trim(),
+        driver: driver.trim() || 'local',
+        driverOpts: parseKv(opts),
+        labels: parseKv(labels),
+      });
+      const dst = nodes.find((n) => n.id === node);
+      toast(`Volume „${name}"${dst ? ` auf ${dst.hostname}` : ''} angelegt`);
+      onDone(); onClose();
+    } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="🗄 Volume anlegen" onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>Abbrechen</button>
+        <button className="btn primary" disabled={busy} onClick={create}>＋ Anlegen</button>
+      </>}>
+      <div className="field">
+        <label>Name <span style={{ color: 'var(--red)' }}>*</span></label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="z. B. app_data" autoFocus />
+      </div>
+      <div className="field">
+        <label>Node</label>
+        <select value={node} onChange={(e) => setNode(e.target.value)}>
+          {nodes.map((n) => <option key={n.id} value={n.id}>{n.hostname}{n.role === 'manager' ? ' (Manager)' : ''}</option>)}
+        </select>
+      </div>
+      <div className="field">
+        <label>Driver</label>
+        <input value={driver} onChange={(e) => setDriver(e.target.value)} placeholder="local" />
+      </div>
+      <div className="field">
+        <label>Driver-Optionen (optional, je Zeile KEY=VALUE)</label>
+        <textarea rows={2} value={opts} onChange={(e) => setOpts(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }}
+          placeholder={'type=nfs\no=addr=10.0.0.1,rw\ndevice=:/path'} />
+      </div>
+      <div className="field">
+        <label>Labels (optional, je Zeile KEY=VALUE)</label>
+        <textarea rows={2} value={labels} onChange={(e) => setLabels(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }}
+          placeholder={'env=production\nteam=backend'} />
+      </div>
+      <div className="help" style={{ marginTop: 8 }}>
+        Legt ein Docker-Volume auf dem gewählten Node an. Für entfernte Nodes muss der Agent laufen. Mit dem Standard-Driver „local" genügt der Name; Driver-Optionen werden z. B. für NFS/CIFS benötigt.
+      </div>
+    </Modal>
+  );
+}
+
 export default function Resources() {
   const toast = useToast();
   const [tab, setTab] = useState('networks');
@@ -581,6 +666,7 @@ export default function Resources() {
   const [bindQ, setBindQ] = useState('');
   const [cfgDetail, setCfgDetail] = useState(null);
   const [cfgAdd, setCfgAdd] = useState(false);
+  const [volAdd, setVolAdd] = useState(false);
   const [secAdd, setSecAdd] = useState(false);
   const [secQ, setSecQ] = useState('');
   const [secDelChk, setSecDelChk] = useState(false);
@@ -637,6 +723,8 @@ export default function Resources() {
             <option value="used">In Verwendung</option>
             <option value="unused">Ungenutzt</option>
           </select>
+          <div className="spacer" />
+          <button className="btn primary" onClick={() => setVolAdd(true)}>＋ Volume anlegen</button>
         </div>
       )}
 
@@ -806,6 +894,7 @@ export default function Resources() {
       {migRow && <MigrationModal row={migRow} onClose={() => setMigRow(null)} onDone={reload} />}
       {cfgDetail && <ConfigDetail cfg={cfgDetail} onClose={() => setCfgDetail(null)} onDeleted={reload} />}
       {cfgAdd && <ConfigAdd onClose={() => setCfgAdd(false)} onDone={reload} />}
+      {volAdd && <VolumeAdd onClose={() => setVolAdd(false)} onDone={reload} />}
       {secAdd && <SecretAdd onClose={() => setSecAdd(false)} onDone={reload} />}
       {secDel && (
         <Modal title="Secret löschen" onClose={() => setSecDel(null)}

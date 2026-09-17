@@ -418,6 +418,31 @@ export async function volumeRemove(nodeId, name, force) {
   return { ok: true };
 }
 
+/** Create a new volume on the local (manager) node or a remote node via its agent. */
+export async function volumeCreate(nodeId, { name, driver, labels, driverOpts } = {}) {
+  await requireManager();
+  if (!name) throw new Error('name erforderlich');
+  if (!/^[\w][\w.-]*$/.test(name)) throw new Error('Ungültiger Volumename');
+  const base = await agentBaseForNode(nodeId);
+  if (base) {
+    const r = await fetchWithTimeout(`${base}/volume-action`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, action: 'create', driver, labels, driverOpts }),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.error || `Agent-Aktion fehlgeschlagen (HTTP ${r.status})`);
+    }
+    return r.json();
+  }
+  const opts = { Name: name };
+  if (driver) opts.Driver = driver;
+  if (labels && Object.keys(labels).length) opts.Labels = labels;
+  if (driverOpts && Object.keys(driverOpts).length) opts.DriverOpts = driverOpts;
+  await docker.createVolume(opts);
+  return { ok: true, name };
+}
+
 /** Best-effort apparent size of a volume (bytes) — local or via node agent. */
 async function volumeSizeOf(nodeId, name, localId) {
   const local = !nodeId || nodeId === localId;

@@ -268,9 +268,17 @@ const server = http.createServer(async (req, res) => {
       return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, ...(await scanImageLocal(ref)) });
     }
     if (u.pathname === '/volume-action' && req.method === 'POST') {
-      const { name, action, force } = await readJson(req);
+      const { name, action, force, driver, labels, driverOpts } = await readJson(req);
       if (!name || !action) { res.statusCode = 400; return json({ error: 'name und action erforderlich' }); }
       if (action === 'remove') { await docker.getVolume(name).remove({ force: Boolean(force) }); return json({ ok: true }); }
+      if (action === 'create') {
+        const opts = { Name: name };
+        if (driver) opts.Driver = driver;
+        if (labels && Object.keys(labels).length) opts.Labels = labels;
+        if (driverOpts && Object.keys(driverOpts).length) opts.DriverOpts = driverOpts;
+        await docker.createVolume(opts);
+        return json({ ok: true, name });
+      }
       res.statusCode = 400; return json({ error: 'Unbekannte Volume-Aktion' });
     }
     if (u.pathname === '/volume-export') {

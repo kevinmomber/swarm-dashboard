@@ -88,11 +88,12 @@ const server = http.createServer(app);
 // --- WebSocket servers (manual upgrade routing for /ws/logs and /ws/exec) ---
 const wssLogs = new WebSocketServer({ noServer: true });
 const wssExec = new WebSocketServer({ noServer: true });
+const wssEvents = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', async (req, socket, head) => {
   const url = new URL(req.url, 'http://localhost');
   const { pathname } = url;
-  if (pathname !== '/ws/logs' && pathname !== '/ws/exec') {
+  if (pathname !== '/ws/logs' && pathname !== '/ws/exec' && pathname !== '/ws/events') {
     return socket.destroy();
   }
   // Enforce auth for websockets when enabled (token via query param).
@@ -105,9 +106,52 @@ server.on('upgrade', async (req, socket, head) => {
   }
   if (pathname === '/ws/logs') {
     wssLogs.handleUpgrade(req, socket, head, (ws) => wssLogs.emit('connection', ws, req));
+  } else if (pathname === '/ws/events') {
+    wssEvents.handleUpgrade(req, socket, head, (ws) => wssEvents.emit('connection', ws, req));
   } else {
     wssExec.handleUpgrade(req, socket, head, (ws) => wssExec.emit('connection', ws, req));
   }
+});
+
+// Live Docker events feed (container/image/volume/network/service/node actions).
+wssEvents.on('connection', async (ws) => {
+  let eventStream;
+  try {
+    eventStream = await docker.getEvents();
+    let buf = '';
+    eventStream.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'event',
+              evType: ev.Type,
+              action: ev.Action,
+              actor: ev.Actor?.Attributes?.name || ev.Actor?.ID || null,
+              image: ev.Actor?.Attributes?.image || null,
+              node: ev.Actor?.Attributes?.['node.hostname'] || null,
+              scope: ev.scope || null,
+              time: (ev.time ? ev.time * 1000 : Date.now()),
+              attributes: ev.Actor?.Attributes || {},
+            }));
+          }
+        } catch { /* skip malformed line */ }
+      }
+    });
+    eventStream.on('error', (e) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'error', message: e.message }));
+    });
+  } catch (e) {
+    ws.send(JSON.stringify({ type: 'error', message: e.message }));
+    return ws.close();
+  }
+  ws.on('close', () => { if (eventStream && typeof eventStream.destroy === 'function') eventStream.destroy(); });
 });
 
 // Live service logs.

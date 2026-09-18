@@ -108,3 +108,8 @@ export function execSocket(serviceId, shell = '/bin/sh') {
     `${proto}://${location.host}/ws/exec?service=${encodeURIComponent(serviceId)}&shell=${encodeURIComponent(shell)}${wsToken()}`
   );
 }
+
+export function eventSocket() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return new WebSocket(`${proto}://${location.host}/ws/events?${wsToken().replace(/^&/, '')}`);
+}

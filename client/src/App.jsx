@@ -7,6 +7,7 @@ import Nodes from './pages/Nodes.jsx';
 import Services from './pages/Services.jsx';
 import Stacks from './pages/Stacks.jsx';
 import Tasks from './pages/Tasks.jsx';
+import Activity from './pages/Activity.jsx';
 import Resources from './pages/Resources.jsx';
 import Containers from './pages/Containers.jsx';
 import Images from './pages/Images.jsx';
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/services', label: 'Services', ico: '⧉' },
   { to: '/stacks', label: 'Stacks', ico: '▤' },
   { to: '/tasks', label: 'Tasks', ico: '☰' },
+  { to: '/activity', label: 'Aktivität', ico: '⚡' },
   { to: '/containers', label: 'Container', ico: '▣' },
   { to: '/images', label: 'Images', ico: '❒' },
   { to: '/resources', label: 'Ressourcen', ico: '⬡' },
@@ -81,6 +83,7 @@ export default function App() {
                 <Route path="/services" element={<Services />} />
                 <Route path="/stacks" element={<Stacks />} />
                 <Route path="/tasks" element={<Tasks />} />
+                <Route path="/activity" element={<Activity />} />
                 <Route path="/containers" element={<Containers />} />
                 <Route path="/images" element={<Images />} />
                 <Route path="/resources" element={<Resources />} />

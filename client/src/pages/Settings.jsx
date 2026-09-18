@@ -8,6 +8,7 @@ import AboutSection from '../components/AboutSection.jsx';
 import AuthSection from '../components/AuthSection.jsx';
 import MonitoringSection from '../components/MonitoringSection.jsx';
 import RegistriesGitSection from '../components/RegistriesGitSection.jsx';
+import AuditSection from '../components/AuditSection.jsx';
 
 const CRON_PRESETS = [
   ['Täglich 02:00', '0 2 * * *'],
@@ -24,6 +25,7 @@ const SECTIONS = [
   { key: 'registries', label: 'Registries & Git' },
   { key: 'proxy', label: 'Reverse Proxy' },
   { key: 'backup', label: 'Backup' },
+  { key: 'audit', label: 'Audit-Log' },
 ];
 
 function download(path) {
@@ -228,6 +230,7 @@ export default function Settings() {
       {section === 'auth' && <AuthSection />}
       {section === 'monitoring' && <MonitoringSection />}
       {section === 'registries' && <RegistriesGitSection />}
+      {section === 'audit' && <AuditSection />}
 
       {section === 'proxy' && (
       <div className="card section">

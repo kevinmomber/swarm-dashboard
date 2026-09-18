@@ -56,6 +56,7 @@ router.get('/', async (req, res, next) => {
           createdAt: s.CreatedAt,
           updatedAt: s.UpdatedAt,
           updateState: s.UpdateStatus?.State || null,
+          hasPrevious: Boolean(s.PreviousSpec),
           version: s.Version?.Index,
         };
       })
@@ -152,6 +153,26 @@ router.post('/:id/update', async (req, res, next) => {
     }
     await svc.update({ version: info.Version.Index, ...spec });
     res.json({ ok: true, image: image || spec.TaskTemplate.ContainerSpec.Image });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Roll a service back to its previous spec (Docker keeps PreviousSpec after an update).
+router.post('/:id/rollback', async (req, res, next) => {
+  try {
+    await requireManager();
+    const svc = docker.getService(req.params.id);
+    const info = await svc.inspect();
+    if (!info.PreviousSpec) {
+      return res.status(400).json({ error: 'Keine vorherige Version vorhanden (kein PreviousSpec)' });
+    }
+    const prev = structuredClone(info.PreviousSpec);
+    prev.TaskTemplate = prev.TaskTemplate || {};
+    prev.TaskTemplate.ForceUpdate = (prev.TaskTemplate.ForceUpdate || 0) + 1;
+    await svc.update({ version: info.Version.Index, ...prev });
+    const image = (prev.TaskTemplate?.ContainerSpec?.Image || '').split('@')[0];
+    res.json({ ok: true, image });
   } catch (err) {
     next(err);
   }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api, postSSE, getToken } from '../api.js';
 import { useApi } from '../components/useApi.js';
-import { Badge, short, ago, bytes, Modal, useToast } from '../components/ui.jsx';
+import { Badge, short, ago, bytes, Modal, useToast, usePersistentState, Copy } from '../components/ui.jsx';
 import TabBar from '../components/TabBar.jsx';
 import FileBrowser from '../components/FileBrowser.jsx';
 
@@ -654,14 +654,14 @@ function VolumeAdd({ onClose, onDone }) {
 
 export default function Resources() {
   const toast = useToast();
-  const [tab, setTab] = useState('networks');
+  const [tab, setTab] = usePersistentState('resources.tab', 'networks');
   const { data, error, loading, reload } = useApi(`/${tab}`, { poll: 10000 });
   const [netDetail, setNetDetail] = useState(null);
   const [volDetail, setVolDetail] = useState(null);
   const [migRow, setMigRow] = useState(null);
-  const [volNode, setVolNode] = useState('all');
+  const [volNode, setVolNode] = usePersistentState('resources.volNode', 'all');
   const [volQ, setVolQ] = useState('');
-  const [volUse, setVolUse] = useState('all'); // all | used | unused
+  const [volUse, setVolUse] = usePersistentState('resources.volUse', 'all'); // all | used | unused
   const [bindStatus, setBindStatus] = useState('all'); // all | ok | caution | skip
   const [bindQ, setBindQ] = useState('');
   const [cfgDetail, setCfgDetail] = useState(null);
@@ -807,7 +807,7 @@ export default function Resources() {
                       <td className="mono">{v.driver}</td>
                       <td>{v.scope}</td>
                       <td>{v.inUse ? <Badge kind="ok">in Verwendung</Badge> : <Badge kind="muted">ungenutzt</Badge>}</td>
-                      <td className="mono" style={{ fontSize: 11 }}>{v.mountpoint}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>{v.mountpoint}{v.mountpoint && <Copy text={v.mountpoint} />}</td>
                       <td>{stackCol(v)}</td>
                       <td><button className="btn sm" onClick={() => setVolDetail(v)}>Details</button></td>
                     </tr>

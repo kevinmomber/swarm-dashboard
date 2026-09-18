@@ -25,6 +25,8 @@ import gitRouter from './routes/git.js';
 import securityRouter from './routes/security.js';
 import pkiRouter from './routes/pki.js';
 import builderRouter from './routes/builder.js';
+import auditRouter from './routes/audit.js';
+import { auditMiddleware } from './audit.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
 import { resolveRunningContainer } from './serviceops.js';
@@ -42,6 +44,7 @@ const api = express.Router();
 api.get('/health', (req, res) => res.json({ ok: true }));
 api.use('/auth', authRouter);
 api.use(authGuard()); // everything below requires auth when enabled
+api.use(auditMiddleware()); // record mutating requests (after auth so actor is known)
 api.use('/info', infoRouter);
 api.use('/nodes', nodesRouter);
 api.use('/services', servicesRouter);
@@ -57,6 +60,7 @@ api.use('/git', gitRouter);
 api.use('/security', securityRouter);
 api.use('/pki', pkiRouter);
 api.use('/builder', builderRouter);
+api.use('/audit', auditRouter);
 api.use('/', clusterRouter); // /containers /images
 api.use('/', miscRouter); // /networks /volumes /secrets /configs
 app.use('/api', api);

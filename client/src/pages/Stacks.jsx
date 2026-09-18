@@ -32,9 +32,20 @@ export default function Stacks() {
   const [editor, setEditor] = useState(null); // { name, compose } or null
   const [detailStack, setDetailStack] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [diff, setDiff] = useState(null); // { name, deployed, summary, diffs } or null
+  const [diffBusy, setDiffBusy] = useState(false);
 
   const openNew = () => setEditor({ name: '', compose: SAMPLE });
   const openEdit = (s) => setEditor({ name: s.name, compose: s.compose });
+
+  const showDiff = async () => {
+    if (!editor?.name) { toast('Stack-Name erforderlich', 'err'); return; }
+    setDiffBusy(true);
+    try {
+      const r = await api.post(`/stacks/${editor.name}/diff`, { compose: editor.compose });
+      setDiff(r);
+    } catch (e) { toast(e.message, 'err'); } finally { setDiffBusy(false); }
+  };
 
   const deploy = async (alsoSave) => {
     setBusy(true);
@@ -169,6 +180,7 @@ export default function Stacks() {
         <Modal wide title={editor.name ? `Stack · ${editor.name}` : 'Neuer Stack'} onClose={() => setEditor(null)}
           footer={<>
             <button className="btn" onClick={() => setEditor(null)}>Abbrechen</button>
+            <button className="btn" disabled={diffBusy || !editor.name} onClick={showDiff}>{diffBusy ? 'Prüfe…' : '≠ Diff anzeigen'}</button>
             <button className="btn" disabled={busy || !editor.name} onClick={saveOnly}>Speichern ohne Deploy</button>
             <button className="btn" disabled={busy || !editor.name} onClick={() => deploy(true)}>Speichern & Deployen</button>
             <button className="btn primary" disabled={busy || !editor.name} onClick={() => deploy(false)}>Deployen</button>
@@ -182,6 +194,38 @@ export default function Stacks() {
             <CodeEditor value={editor.compose} onChange={(v) => setEditor({ ...editor, compose: v })} minHeight={340} />
           </div>
           <p className="help">Deploy erfordert die Docker-CLI im Backend-Container. „Speichern" legt die Definition ohne Deploy ab.</p>
+        </Modal>
+      )}
+      {diff && (
+        <Modal wide title={`Diff · ${diff.name}`} onClose={() => setDiff(null)}
+          footer={<button className="btn" onClick={() => setDiff(null)}>Schließen</button>}>
+          {!diff.deployed && <div className="banner" style={{ marginBottom: 10 }}>Stack ist noch nicht deployt — alle Dienste werden neu erstellt.</div>}
+          <div className="help" style={{ marginBottom: 10 }}>
+            <Badge kind="ok">{diff.summary.added} neu</Badge>{' '}
+            <Badge kind="warn">{diff.summary.changed} geändert</Badge>{' '}
+            <Badge kind="err">{diff.summary.removed} entfernt</Badge>{' '}
+            <Badge kind="muted">{diff.summary.unchanged} unverändert</Badge>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Service</th><th>Änderung</th><th>Details</th></tr></thead>
+              <tbody>
+                {diff.diffs.map((d) => (
+                  <tr key={d.service}>
+                    <td style={{ fontWeight: 600 }}>{d.service}</td>
+                    <td><Badge kind={d.change === 'added' ? 'ok' : d.change === 'removed' ? 'err' : d.change === 'changed' ? 'warn' : 'muted'}>{d.change}</Badge></td>
+                    <td className="mono" style={{ fontSize: 12 }}>
+                      {d.fields.length === 0 ? '–' : d.fields.map((f) => (
+                        <div key={f.field}>
+                          <b>{f.field}:</b> <span style={{ color: 'var(--red)' }}>{JSON.stringify(f.from)}</span> → <span style={{ color: 'var(--green,#3fb950)' }}>{JSON.stringify(f.to)}</span>
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Modal>
       )}
       {detailStack && <StackDetailModal name={detailStack} onClose={() => setDetailStack(null)} />}

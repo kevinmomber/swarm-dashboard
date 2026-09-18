@@ -316,7 +316,11 @@ export default function PkiPanel() {
             <div style={{ fontSize: 18, fontWeight: 700 }}>{ca.cn}</div>
             {ca.org && <div className="help">{ca.org}</div>}
             <div className="help" style={{ marginTop: 4 }}>
-              Gültig bis {fmtDate(ca.notAfter)} · {ca.bits} bit · {ca.certCount} Zertifikate ausgestellt
+              Gültig bis {fmtDate(ca.notAfter)}
+              {ca.notAfter && (() => { const dl = daysLeft(ca.notAfter); return dl <= 60
+                ? <> <Badge kind={dl <= 30 ? 'err' : 'warn'}>läuft in {dl} T ab</Badge></>
+                : <> <Badge kind="ok">{dl} T gültig</Badge></>; })()}
+              {' '}· {ca.bits} bit · {ca.certCount} Zertifikate ausgestellt
             </div>
             <div className="mono help" style={{ marginTop: 4, fontSize: 10, wordBreak: 'break-all' }}>
               SHA-256: {ca.fingerprint}

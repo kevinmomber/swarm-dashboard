@@ -12,6 +12,7 @@ import Containers from './pages/Containers.jsx';
 import Images from './pages/Images.jsx';
 import Security from './pages/Security.jsx';
 import Settings from './pages/Settings.jsx';
+import CommandPalette from './components/CommandPalette.jsx';
 
 const NAV = [
   { to: '/', label: 'Übersicht', ico: '▚', end: true },
@@ -55,6 +56,7 @@ export default function App() {
     <ThemeProvider>
       <AuthProvider>
         <ToastProvider>
+          <CommandPalette />
           <div className="layout">
             <aside className="sidebar">
               <div className="brand">

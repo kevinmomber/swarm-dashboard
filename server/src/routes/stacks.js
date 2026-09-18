@@ -100,6 +100,82 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+/** Diff a proposed compose against the currently deployed stack (image/replicas/env/ports). */
+router.post('/:name/diff', async (req, res, next) => {
+  try {
+    await requireManager();
+    const { name } = req.params;
+    const { compose } = req.body || {};
+    if (!compose || typeof compose !== 'string') {
+      return res.status(400).json({ error: 'compose (YAML-String) erforderlich' });
+    }
+    let doc;
+    try { doc = yaml.load(compose); } catch (e) {
+      return res.status(400).json({ error: `Ungültiges Compose-YAML: ${e.message}` });
+    }
+    const proposed = (doc && doc.services) || {};
+
+    const filters = { label: [`${NS_LABEL}=${name}`] };
+    const current = await docker.listServices({ filters });
+    const strip = (s) => (s && s.startsWith(`${name}_`) ? s.slice(name.length + 1) : s);
+    const curByName = new Map();
+    for (const s of current) {
+      const spec = s.Spec || {};
+      const cs = spec.TaskTemplate?.ContainerSpec || {};
+      const mode = spec.Mode || {};
+      curByName.set(strip(spec.Name), {
+        image: (cs.Image || '').split('@')[0],
+        replicas: mode.Replicated ? (mode.Replicated.Replicas ?? null) : (mode.Global ? 'global' : null),
+        env: (cs.Env || []).slice().sort(),
+        ports: (spec.EndpointSpec?.Ports || s.Endpoint?.Ports || [])
+          .filter((p) => p.PublishedPort)
+          .map((p) => `${p.PublishedPort}:${p.TargetPort}${p.Protocol && p.Protocol !== 'tcp' ? '/' + p.Protocol : ''}`)
+          .sort(),
+      });
+    }
+
+    const normPorts = (arr) => (arr || []).map((p) => (typeof p === 'string' ? p : `${p.published || p.target}:${p.target}`)).sort();
+    const normEnv = (env) => {
+      if (Array.isArray(env)) return env.slice().sort();
+      if (env && typeof env === 'object') return Object.entries(env).map(([k, v]) => `${k}=${v}`).sort();
+      return [];
+    };
+    const replicasOf = (svc) => {
+      if (svc.deploy?.mode === 'global') return 'global';
+      const r = svc.deploy?.replicas;
+      return r === undefined ? 1 : r;
+    };
+
+    const names = new Set([...curByName.keys(), ...Object.keys(proposed)]);
+    const diffs = [];
+    for (const n of [...names].sort()) {
+      const cur = curByName.get(n);
+      const pr = proposed[n];
+      if (!cur) { diffs.push({ service: n, change: 'added', fields: [] }); continue; }
+      if (!pr) { diffs.push({ service: n, change: 'removed', fields: [] }); continue; }
+      const prImage = (pr.image || '').split('@')[0];
+      const prReplicas = replicasOf(pr);
+      const prEnv = normEnv(pr.environment);
+      const prPorts = normPorts(pr.ports);
+      const fields = [];
+      if (prImage && prImage !== cur.image) fields.push({ field: 'image', from: cur.image, to: prImage });
+      if (String(prReplicas) !== String(cur.replicas)) fields.push({ field: 'replicas', from: cur.replicas, to: prReplicas });
+      if (JSON.stringify(prEnv) !== JSON.stringify(cur.env)) fields.push({ field: 'env', from: cur.env, to: prEnv });
+      if (JSON.stringify(prPorts) !== JSON.stringify(cur.ports)) fields.push({ field: 'ports', from: cur.ports, to: prPorts });
+      diffs.push({ service: n, change: fields.length ? 'changed' : 'unchanged', fields });
+    }
+    const summary = {
+      added: diffs.filter((d) => d.change === 'added').length,
+      removed: diffs.filter((d) => d.change === 'removed').length,
+      changed: diffs.filter((d) => d.change === 'changed').length,
+      unchanged: diffs.filter((d) => d.change === 'unchanged').length,
+    };
+    res.json({ name, deployed: current.length > 0, summary, diffs });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** Deploy (create/update) a stack from a compose YAML string via the docker CLI. */
 router.post('/deploy', async (req, res, next) => {
   let tmpFile;

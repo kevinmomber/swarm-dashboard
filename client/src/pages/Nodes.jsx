@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api.js';
 import { useApi } from '../components/useApi.js';
-import { Badge, Modal, stateKind, bytes, short, useToast } from '../components/ui.jsx';
+import { Badge, Modal, stateKind, bytes, short, useToast, Copy } from '../components/ui.jsx';
 
 function Bar({ pct, caption }) {
   const p = pct == null ? null : Math.max(0, Math.min(100, pct));
@@ -120,7 +120,7 @@ export default function Nodes() {
                       {n.hostname} {n.connected && <Badge kind="info">verbunden</Badge>}
                       {n.live?.source === 'agent' && <Badge kind="ok">agent{n.agentVersion ? ` v${n.agentVersion}` : ''}</Badge>}
                     </div>
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>{short(n.id)} · {n.addr}</div>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>{short(n.id)}<Copy text={n.id} /> · {n.addr}</div>
                   </td>
                   <td>{n.role === 'manager'
                     ? <Badge kind={n.leader ? 'info' : 'muted'}>{n.leader ? 'Leader' : 'Manager'}</Badge>
@@ -133,6 +133,7 @@ export default function Nodes() {
                   <td>
                     <div className="actions">
                       <button className="btn sm" disabled={n.availability === 'active'} onClick={() => setAvailability(n.id, 'active')}>Aktivieren</button>
+                      <button className="btn sm" disabled={n.availability === 'pause'} onClick={() => setAvailability(n.id, 'pause')}>Pause</button>
                       <button className="btn sm" disabled={n.availability === 'drain'} onClick={() => setAvailability(n.id, 'drain')}>Drain</button>
                       <button className="btn sm danger" disabled={n.connected} title={n.connected ? 'Verbundener Node' : ''} onClick={() => { setRemoveTarget(n); setConfirmChk(false); }}>Entfernen</button>
                     </div>

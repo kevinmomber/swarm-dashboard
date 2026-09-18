@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApi } from '../components/useApi.js';
-import { Badge, stateKind, short, ago } from '../components/ui.jsx';
+import { Badge, stateKind, short, ago, usePersistentState } from '../components/ui.jsx';
 
 const COLUMNS = [
   { key: 'id', label: 'Task' },
@@ -20,12 +20,12 @@ const TERMINAL = new Set(['complete', 'shutdown', 'failed', 'rejected', 'orphane
 export default function Tasks() {
   const { data, error, loading, reload } = useApi('/tasks', { poll: 5000 });
   const [q, setQ] = useState('');
-  const [node, setNode] = useState('all');
-  const [image, setImage] = useState('all');
-  const [desired, setDesired] = useState('all');
-  const [state, setState] = useState('all');
-  const [hideTerminated, setHideTerminated] = useState(false);
-  const [sort, setSort] = useState({ key: 'timestamp', dir: 'desc' });
+  const [node, setNode] = usePersistentState('tasks.node', 'all');
+  const [image, setImage] = usePersistentState('tasks.image', 'all');
+  const [desired, setDesired] = usePersistentState('tasks.desired', 'all');
+  const [state, setState] = usePersistentState('tasks.state', 'all');
+  const [hideTerminated, setHideTerminated] = usePersistentState('tasks.hideTerminated', false);
+  const [sort, setSort] = usePersistentState('tasks.sort', { key: 'timestamp', dir: 'desc' });
 
   const tasks = data || [];
   const nodes = useMemo(() => distinct(tasks, 'node'), [tasks]);

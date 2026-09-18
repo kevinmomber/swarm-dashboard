@@ -86,3 +86,60 @@ export function ago(iso) {
 export function short(id) {
   return (id || '').replace(/^.*:/, '').slice(0, 12);
 }
+
+/* ---------- Copy-to-clipboard button ---------- */
+export function Copy({ text, title = 'In Zwischenablage kopieren', label }) {
+  const toast = useToast();
+  const [done, setDone] = useState(false);
+  const copy = async (e) => {
+    e?.stopPropagation?.();
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(String(text));
+      else {
+        const ta = document.createElement('textarea');
+        ta.value = String(text); document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+      }
+      setDone(true); setTimeout(() => setDone(false), 1200);
+      toast('Kopiert');
+    } catch { toast('Kopieren fehlgeschlagen', 'err'); }
+  };
+  return (
+    <button type="button" className="copy-btn" onClick={copy} title={title}
+      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', opacity: 0.7, padding: '0 4px', fontSize: 12 }}>
+      {done ? '✓' : '⧉'}{label ? <span style={{ marginLeft: 4 }}>{label}</span> : null}
+    </button>
+  );
+}
+
+/* ---------- localStorage-backed state (filter/column persistence) ---------- */
+export function usePersistentState(key, initial) {
+  const storageKey = `swarmdash.pref.${key}`;
+  const [val, setVal] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw != null ? JSON.parse(raw) : initial;
+    } catch { return initial; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify(val)); } catch { /* ignore */ }
+  }, [storageKey, val]);
+  return [val, setVal];
+}
+
+/** Days until an ISO date (negative = already expired). */
+export function daysUntil(iso) {
+  if (!iso) return null;
+  return Math.floor((new Date(iso).getTime() - Date.now()) / 86400000);
+}
+
+/** Badge kind + label for a certificate/CA expiry. */
+export function expiryInfo(iso) {
+  const d = daysUntil(iso);
+  if (d === null) return { kind: 'muted', label: '–', days: null };
+  if (d < 0) return { kind: 'err', label: `abgelaufen (${-d} Tg)`, days: d };
+  if (d <= 14) return { kind: 'err', label: `${d} Tg`, days: d };
+  if (d <= 30) return { kind: 'warn', label: `${d} Tg`, days: d };
+  return { kind: 'ok', label: `${d} Tg`, days: d };
+}

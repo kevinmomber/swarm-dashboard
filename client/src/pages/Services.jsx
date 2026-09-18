@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api.js';
 import { useApi } from '../components/useApi.js';
-import { Badge, Modal, stateKind, short, useToast } from '../components/ui.jsx';
+import { Badge, Modal, stateKind, short, useToast, Copy } from '../components/ui.jsx';
 import LogViewer from '../components/LogViewer.jsx';
 import Console from '../components/Console.jsx';
 import TagModal from '../components/TagModal.jsx';
@@ -13,6 +13,26 @@ function ReplicaCell({ s }) {
   if (s.mode === 'global') return <Badge kind="info">global</Badge>;
   const ok = s.desired != null && s.running >= s.desired;
   return <Badge kind={ok ? 'ok' : s.running === 0 ? 'err' : 'warn'}>{s.running} / {s.desired ?? '?'}</Badge>;
+}
+
+/** Health derived from replica coverage + swarm update state. */
+function health(s) {
+  const us = (s.updateState || '').toLowerCase();
+  if (['updating', 'rollback_started'].includes(us)) return { kind: 'warn', label: 'Update läuft' };
+  if (['paused', 'rollback_paused'].includes(us)) return { kind: 'err', label: 'Update pausiert' };
+  if (s.mode === 'global') {
+    if (s.running === 0) return { kind: 'err', label: 'down' };
+    return { kind: 'ok', label: 'gesund' };
+  }
+  if (s.desired === 0) return { kind: 'muted', label: 'gestoppt' };
+  if (s.running >= (s.desired ?? 0) && s.desired != null) return { kind: 'ok', label: 'gesund' };
+  if (s.running === 0) return { kind: 'err', label: 'down' };
+  return { kind: 'warn', label: 'degradiert' };
+}
+
+function HealthCell({ s }) {
+  const h = health(s);
+  return <Badge kind={h.kind}>{h.label}</Badge>;
 }
 
 function ServiceTags({ s }) {
@@ -87,6 +107,15 @@ export default function Services() {
 
   const exportSvc = (s) => { toast(`Export von ${s.name} wird erstellt…`); download(`/services/${s.id}/export`); };
 
+  const rollback = async (s) => {
+    if (!window.confirm(`Service „${s.name}" auf die vorherige Version zurückrollen?`)) return;
+    try {
+      const r = await api.post(`/services/${s.id}/rollback`);
+      toast(`${s.name} zurückgerollt${r.image ? ` (${r.image})` : ''}`);
+      reload();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
   const checkUpdates = async () => {
     setChecking(true);
     try {
@@ -116,7 +145,7 @@ export default function Services() {
       <table>
         <thead>
           <tr>
-            <th>Name</th><th>Image</th><th>Repliken</th><th>Tags</th><th>Ports</th><th>Aktionen</th>
+            <th>Name</th><th>Image</th><th>Status</th><th>Repliken</th><th>Tags</th><th>Ports</th><th>Aktionen</th>
           </tr>
         </thead>
         <tbody>
@@ -130,10 +159,11 @@ export default function Services() {
                   {' '}{upd?.updateAvailable && <Badge kind="warn">Update verfügbar</Badge>}
                 </div>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                  {short(s.id)}{s.stack ? ` · ${s.stack}` : ''}
+                  {short(s.id)}<Copy text={s.id} />{s.stack ? ` · ${s.stack}` : ''}
                 </div>
               </td>
               <td className="mono" style={{ fontSize: 12 }}>{s.image}</td>
+              <td><HealthCell s={s} /></td>
               <td><ReplicaCell s={s} /></td>
               <td><ServiceTags s={s} /></td>
               <td className="mono" style={{ fontSize: 12 }}>
@@ -147,6 +177,7 @@ export default function Services() {
                   { label: 'Skalieren', onClick: () => openScale(s), hidden: s.mode !== 'replicated' },
                   { label: 'Bearbeiten & Redeploy', onClick: () => setEditSvc(s) },
                   { label: upd?.updateAvailable ? 'Update (verfügbar)' : 'Update', onClick: () => openUpdate(s) },
+                  { label: 'Rollback', onClick: () => rollback(s), hidden: !s.hasPrevious },
                   { label: 'Export', onClick: () => exportSvc(s) },
                   { label: 'Tag', onClick: () => setTagSvc(s) },
                   { label: 'Entfernen', onClick: () => remove(s), danger: true },

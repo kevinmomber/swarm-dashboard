@@ -33,7 +33,7 @@ import { applyMonitoring } from './monitoring.js';
 import { startMetricsSampler } from './metricshistory.js';
 import { resolveRunningContainer } from './serviceops.js';
 import { agentBaseForNode } from './metrics.js';
-import { authGuard, isEnabled, verifyToken } from './auth.js';
+import { authGuard, isEnabled, verifyToken, roleGuard } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -46,6 +46,7 @@ const api = express.Router();
 api.get('/health', (req, res) => res.json({ ok: true }));
 api.use('/auth', authRouter);
 api.use(authGuard()); // everything below requires auth when enabled
+api.use(roleGuard()); // enforce viewer/operator/admin on mutating requests
 api.use(auditMiddleware()); // record mutating requests (after auth so actor is known)
 api.use('/info', infoRouter);
 api.use('/nodes', nodesRouter);

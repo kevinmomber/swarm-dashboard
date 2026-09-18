@@ -57,7 +57,7 @@ router.get('/users', guardAdmin, async (req, res, next) => {
 router.post('/users', guardAdmin, async (req, res, next) => {
   try {
     const { username, password, role } = req.body || {};
-    res.json(await createUser(username, password, role === 'viewer' ? 'viewer' : 'admin'));
+    res.json(await createUser(username, password, ['admin', 'operator', 'viewer'].includes(role) ? role : 'admin'));
   } catch (err) { next(err); }
 });
 router.delete('/users/:username', guardAdmin, async (req, res, next) => {

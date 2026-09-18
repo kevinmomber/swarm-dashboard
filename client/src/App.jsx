@@ -42,6 +42,7 @@ function ThemeToggle() {
 function UserBox() {
   const { enabled, user, logout } = useAuth();
   if (!enabled || !user) return null;
+  const roleKind = user.role === 'admin' ? 'info' : user.role === 'operator' ? 'warn' : 'muted';
   return (
     <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', marginTop: 6 }}>
       <div className="help">Angemeldet als</div>
@@ -49,6 +50,19 @@ function UserBox() {
         <span style={{ fontWeight: 600 }}>{user.username}</span>
         <button className="btn sm" onClick={logout}>Abmelden</button>
       </div>
+      <div style={{ marginTop: 4 }}><span className={`badge ${roleKind}`}>{user.role}</span></div>
+    </div>
+  );
+}
+
+function RoleBanner() {
+  const { enabled, user } = useAuth();
+  if (!enabled || !user || user.role === 'admin') return null;
+  return (
+    <div className="banner" style={{ marginBottom: 12 }}>
+      {user.role === 'viewer'
+        ? '👁 Viewer-Rolle: Nur-Lese-Zugriff — ändernde Aktionen sind deaktiviert.'
+        : '🔧 Operator-Rolle: PKI, Endpoints, Reverse Proxy und Einstellungen sind Administratoren vorbehalten.'}
     </div>
   );
 }
@@ -77,6 +91,7 @@ export default function App() {
               </div>
             </aside>
             <main className="main">
+              <RoleBanner />
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/nodes" element={<Nodes />} />

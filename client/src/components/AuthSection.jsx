@@ -81,7 +81,7 @@ export default function AuthSection() {
                 {users.map((u) => (
                   <tr key={u.username}>
                     <td style={{ fontWeight: 600 }}>{u.username}</td>
-                    <td><Badge kind={u.role === 'admin' ? 'info' : 'muted'}>{u.role}</Badge></td>
+                    <td><Badge kind={u.role === 'admin' ? 'info' : u.role === 'operator' ? 'warn' : 'muted'}>{u.role}</Badge></td>
                     <td><button className="btn sm danger" disabled={busy} onClick={() => delUser(u.username)}>Löschen</button></td>
                   </tr>
                 ))}
@@ -98,6 +98,7 @@ export default function AuthSection() {
         <div className="field"><label>Rolle</label>
           <select value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })}>
             <option value="admin">admin</option>
+            <option value="operator">operator</option>
             <option value="viewer">viewer</option>
           </select></div>
         <div className="field" style={{ display: 'flex', alignItems: 'flex-end' }}>

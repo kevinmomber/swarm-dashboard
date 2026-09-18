@@ -45,10 +45,11 @@ export async function createUser(username, password, role = 'admin') {
   const a = await load();
   if (!username || !password) throw new Error('username und password erforderlich');
   if (a.users.some((u) => u.username === username)) throw new Error('Benutzer existiert bereits');
+  const validRole = ['admin', 'operator', 'viewer'].includes(role) ? role : 'admin';
   const salt = crypto.randomBytes(16).toString('hex');
-  a.users.push({ username, salt, hash: hash(password, salt), role, createdAt: new Date().toISOString() });
+  a.users.push({ username, salt, hash: hash(password, salt), role: validRole, createdAt: new Date().toISOString() });
   await persist();
-  return { username, role };
+  return { username, role: validRole };
 }
 export async function deleteUser(username) {
   const a = await load();
@@ -111,4 +112,34 @@ export function authGuard() {
 export function requireAdmin(req, res, next) {
   if (req.user && req.user.role !== 'admin') return res.status(403).json({ error: 'Adminrecht erforderlich' });
   next();
+}
+
+// Paths only an admin may mutate (operators are blocked here).
+const ADMIN_ONLY_WRITE = [
+  /^\/api\/pki(\/|$)/,        // internal CA / certificates
+  /^\/api\/endpoints(\/|$)/,  // registering remote Docker roots = full host access
+  /^\/api\/settings(\/|$)/,   // global configuration
+  /^\/api\/proxy(\/|$)/,      // reverse-proxy stack
+];
+
+/**
+ * Role-based access control (runs after authGuard, so req.user is set):
+ *  - viewer   : read-only (all mutating requests blocked)
+ *  - operator : may mutate, except admin-only areas (PKI, endpoints, settings, proxy)
+ *  - admin    : unrestricted
+ */
+export function roleGuard() {
+  return (req, res, next) => {
+    if (!req.user) return next(); // auth disabled
+    if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
+    const role = req.user.role || 'admin';
+    if (role === 'admin') return next();
+    if (role === 'viewer') return res.status(403).json({ error: 'Nur-Lese-Zugriff (Viewer-Rolle)' });
+    // operator
+    const path = (req.originalUrl || req.url).split('?')[0];
+    if (ADMIN_ONLY_WRITE.some((re) => re.test(path))) {
+      return res.status(403).json({ error: 'Diese Aktion ist Administratoren vorbehalten' });
+    }
+    next();
+  };
 }

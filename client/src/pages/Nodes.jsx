@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useApi } from '../components/useApi.js';
 import { Badge, Modal, stateKind, bytes, short, useToast, Copy, usePersistentState } from '../components/ui.jsx';
+import EndpointManageModal from '../components/EndpointManageModal.jsx';
 
 function Bar({ pct, caption }) {
   const p = pct == null ? null : Math.max(0, Math.min(100, pct));
@@ -65,6 +66,7 @@ export default function Nodes() {
   const [confirmChk, setConfirmChk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [groupBy, setGroupBy] = usePersistentState('nodes.groupBy', 'endpoint'); // 'endpoint' | 'tag'
+  const [manageEp, setManageEp] = useState(null);
 
   const setAvailability = async (id, availability) => {
     try {
@@ -163,6 +165,7 @@ export default function Nodes() {
         <span className="help" style={{ marginLeft: 'auto' }}>
           {ep.reachable ? `${ep.nodes?.length || 0} Node(s) · Docker ${ep.dockerVersion || '?'}` : (ep.error || 'Verbindung fehlgeschlagen')}
         </span>
+        {ep.reachable && <button className="btn sm" onClick={() => setManageEp(ep)}>Verwalten</button>}
       </div>
       {ep.reachable && ep.nodes?.length > 0 && (
         <div className="table-wrap">
@@ -248,6 +251,7 @@ export default function Nodes() {
           </label>
         </Modal>
       )}
+      {manageEp && <EndpointManageModal endpoint={manageEp} onClose={() => setManageEp(null)} />}
     </>
   );
 }

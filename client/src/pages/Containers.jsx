@@ -4,6 +4,7 @@ import { useApi } from '../components/useApi.js';
 import { Badge, stateKind, short, ago, useToast, Modal } from '../components/ui.jsx';
 import Dropdown from '../components/Dropdown.jsx';
 import ContainerEditModal from '../components/ContainerEditModal.jsx';
+import FileBrowser from '../components/FileBrowser.jsx';
 
 const keyOf = (c) => `${c.id}@${c.nodeId}`;
 const shortImage = (img) => (img && img.startsWith('sha256:') ? img.slice(0, 19) + '…' : img);
@@ -20,6 +21,7 @@ export default function Containers() {
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [pending, setPending] = useState([]);
   const [editC, setEditC] = useState(null);
+  const [filesC, setFilesC] = useState(null);
 
   const nodes = [...new Set((data || []).map((c) => c.node).filter(Boolean))].sort();
   const states = [...new Set((data || []).map((c) => c.state).filter(Boolean))].sort();
@@ -157,12 +159,14 @@ export default function Containers() {
                   <td>
                     {c.swarm
                       ? <Dropdown items={[
+                          { label: 'Dateien', onClick: () => setFilesC(c), hidden: c.state !== 'running' },
                           { label: '✕ Entfernen', danger: true, onClick: () => openConfirm([c]) },
                         ]} />
                       : <Dropdown items={[
                           { label: 'Start', onClick: () => act(c, 'start'), hidden: c.state === 'running' },
                           { label: 'Stop', onClick: () => act(c, 'stop'), hidden: c.state !== 'running' },
                           { label: 'Restart', onClick: () => act(c, 'restart'), hidden: c.state !== 'running' },
+                          { label: 'Dateien', onClick: () => setFilesC(c), hidden: c.state !== 'running' },
                           { label: 'Bearbeiten & Redeploy', onClick: () => setEditC(c) },
                           { label: 'Entfernen', danger: true, onClick: () => openConfirm([c]) },
                         ]} />}
@@ -207,6 +211,12 @@ export default function Containers() {
         </Modal>
       )}
       {editC && <ContainerEditModal container={editC} onClose={() => setEditC(null)} onDone={reload} />}
+      {filesC && (
+        <Modal wide title={`Dateien · ${filesC.name}`} onClose={() => setFilesC(null)}
+          footer={<button className="btn" onClick={() => setFilesC(null)}>Schließen</button>}>
+          <FileBrowser nodeId={filesC.nodeId} containerId={filesC.id} />
+        </Modal>
+      )}
     </>
   );
 }

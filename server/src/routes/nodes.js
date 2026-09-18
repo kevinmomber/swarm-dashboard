@@ -1,8 +1,17 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
 import { reservedByNode, connectedNodeStats, agentMetrics } from '../metrics.js';
+import { history as metricsHistory } from '../metricshistory.js';
 
 const router = Router();
+
+// Time-series history of node CPU/RAM/disk for charts.
+router.get('/history', async (req, res, next) => {
+  try {
+    const hours = Number(req.query.hours) || 6;
+    res.json(metricsHistory({ hours }));
+  } catch (err) { next(err); }
+});
 
 router.get('/', async (req, res, next) => {
   try {

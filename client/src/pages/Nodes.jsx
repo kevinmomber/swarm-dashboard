@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { useApi } from '../components/useApi.js';
 import { Badge, Modal, stateKind, bytes, short, useToast, Copy, usePersistentState } from '../components/ui.jsx';
 import EndpointManageModal from '../components/EndpointManageModal.jsx';
+import MetricsChart from '../components/MetricsChart.jsx';
 
 function Bar({ pct, caption }) {
   const p = pct == null ? null : Math.max(0, Math.min(100, pct));
@@ -220,6 +221,8 @@ export default function Nodes() {
           </div>
         </>
       )}
+
+      <MetricsChart />
 
       <div className="toolbar" style={{ marginBottom: 12 }}>
         <label style={{ margin: 0 }}>Gruppieren nach:</label>

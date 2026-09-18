@@ -30,6 +30,7 @@ import endpointsRouter from './routes/endpoints.js';
 import { auditMiddleware } from './audit.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
+import { startMetricsSampler } from './metricshistory.js';
 import { resolveRunningContainer } from './serviceops.js';
 import { agentBaseForNode } from './metrics.js';
 import { authGuard, isEnabled, verifyToken } from './auth.js';
@@ -286,4 +287,5 @@ server.listen(PORT, () => {
   console.log(`Docker-Endpoint: ${process.env.DOCKER_HOST || 'lokaler Socket/Pipe'}`);
   applySchedule().catch((e) => console.error('Scheduler-Init fehlgeschlagen:', e.message));
   applyMonitoring().catch((e) => console.error('Monitoring-Init fehlgeschlagen:', e.message));
+  try { startMetricsSampler(); } catch (e) { console.error('Metrik-Sampler-Init fehlgeschlagen:', e.message); }
 });

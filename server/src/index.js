@@ -31,6 +31,7 @@ import { auditMiddleware } from './audit.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
 import { startMetricsSampler } from './metricshistory.js';
+import { applyGitopsSchedule } from './gitops.js';
 import { resolveRunningContainer } from './serviceops.js';
 import { agentBaseForNode } from './metrics.js';
 import { authGuard, isEnabled, verifyToken, roleGuard } from './auth.js';
@@ -289,4 +290,5 @@ server.listen(PORT, () => {
   applySchedule().catch((e) => console.error('Scheduler-Init fehlgeschlagen:', e.message));
   applyMonitoring().catch((e) => console.error('Monitoring-Init fehlgeschlagen:', e.message));
   try { startMetricsSampler(); } catch (e) { console.error('Metrik-Sampler-Init fehlgeschlagen:', e.message); }
+  try { applyGitopsSchedule(); } catch (e) { console.error('GitOps-Scheduler-Init fehlgeschlagen:', e.message); }
 });

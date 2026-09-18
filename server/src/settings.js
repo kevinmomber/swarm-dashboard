@@ -79,6 +79,7 @@ const DEFAULTS = {
   monitorLog: [], // [{ at, level, target, message }]
   registries: [], // [{ id, name, url, username, password }]
   git: [], // [{ id, name, url, branch, composePath, token }]
+  gitops: [], // [{ id, name, gitId, stackName, composePath, autoDeploy, intervalMin, lastSha, lastDeployedAt, lastStatus, lastError }]
   builder: {
     // Saved Dockerfiles for the Builder tab and recent build history.
     dockerfiles: [], // [{ id, name, content, updatedAt }]
@@ -166,6 +167,7 @@ export function applyPatch(current, patch) {
   merged.monitorLog = current.monitorLog || []; // managed by the monitor
   merged.registries = current.registries || []; // managed by dedicated endpoints
   merged.git = current.git || []; // managed by dedicated endpoints
+  merged.gitops = current.gitops || []; // managed by dedicated endpoints
   return merged;
 }
 

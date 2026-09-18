@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { loadSettings, saveSettings, redact } from '../settings.js';
+import { listGitops, addGitops, updateGitops, deleteGitops, syncGitops } from '../gitops.js';
 
 const router = Router();
 
@@ -73,6 +74,23 @@ router.post('/:id/fetch', async (req, res, next) => {
   } finally {
     if (tmp) await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+/* ------------------------ GitOps auto-deploy ------------------------ */
+router.get('/ops', async (req, res, next) => {
+  try { res.json(await listGitops()); } catch (err) { next(err); }
+});
+router.post('/ops', async (req, res, next) => {
+  try { res.json(await addGitops(req.body || {})); } catch (err) { next(err); }
+});
+router.put('/ops/:id', async (req, res, next) => {
+  try { res.json(await updateGitops(req.params.id, req.body || {})); } catch (err) { next(err); }
+});
+router.delete('/ops/:id', async (req, res, next) => {
+  try { res.json(await deleteGitops(req.params.id)); } catch (err) { next(err); }
+});
+router.post('/ops/:id/sync', async (req, res, next) => {
+  try { res.json(await syncGitops(req.params.id, { force: req.body?.force === true })); } catch (err) { next(err); }
 });
 
 export default router;

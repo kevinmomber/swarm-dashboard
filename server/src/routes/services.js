@@ -107,6 +107,34 @@ router.post('/check-updates', async (req, res, next) => {
   }
 });
 
+// Cluster topology: stacks -> services -> networks (for the diagram view).
+router.get('/topology', async (req, res, next) => {
+  try {
+    await requireManager();
+    const [services, networks, summary] = await Promise.all([
+      docker.listServices(), docker.listNetworks(), taskSummary(),
+    ]);
+    const netName = new Map(networks.map((n) => [n.Id, n.Name]));
+    const svc = services.map((s) => {
+      const spec = s.Spec || {};
+      const nets = (spec.TaskTemplate?.Networks || []).map((n) => netName.get(n.Target) || n.Target).filter((n) => n && n !== 'ingress');
+      const sum = summary.get(s.ID) || { running: 0 };
+      const mode = spec.Mode || {};
+      return {
+        id: s.ID,
+        name: spec.Name,
+        stack: spec.Labels?.['com.docker.stack.namespace'] || null,
+        running: sum.running,
+        desired: mode.Replicated ? (mode.Replicated.Replicas ?? null) : (mode.Global ? 'global' : null),
+        networks: [...new Set(nets)],
+        ports: (s.Endpoint?.Ports || []).filter((p) => p.PublishedPort).map((p) => p.PublishedPort),
+      };
+    });
+    const usedNets = [...new Set(svc.flatMap((s) => s.networks))].sort();
+    res.json({ services: svc, networks: usedNets });
+  } catch (err) { next(err); }
+});
+
 router.get('/:id', async (req, res, next) => {
   try {
     await requireManager();

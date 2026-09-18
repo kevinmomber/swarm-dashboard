@@ -86,6 +86,15 @@ export default function Nodes() {
 
   const refreshAll = () => { reload(); reloadInv(); };
 
+  const epStats = useMemo(() => {
+    const eps = inv || [];
+    return {
+      total: eps.length,
+      reachable: eps.filter((e) => e.reachable).length,
+      unreachable: eps.filter((e) => !e.reachable),
+    };
+  }, [inv]);
+
   const connected = (data || []).find((n) => n.connected);
   const anyAgent = (data || []).some((n) => n.live?.source === 'agent');
   const m = connected?.live || (metrics && !metrics.error ? metrics : null);
@@ -167,6 +176,12 @@ export default function Nodes() {
         </span>
         {ep.reachable && <button className="btn sm" onClick={() => setManageEp(ep)}>Verwalten</button>}
       </div>
+      {ep.reachable && (ep.containers != null) && (
+        <div className="help" style={{ marginBottom: 6 }}>
+          {ep.containersRunning ?? 0}/{ep.containers} Container laufend · {ep.images ?? '?'} Images
+          {ep.ncpu ? ` · ${ep.ncpu} CPU` : ''}{ep.memTotal ? ` · ${bytes(ep.memTotal)} RAM` : ''}
+        </div>
+      )}
       {ep.reachable && ep.nodes?.length > 0 && (
         <div className="table-wrap">
           <table>
@@ -212,7 +227,18 @@ export default function Nodes() {
           <option value="endpoint">Endpoint (Zugehörigkeit)</option>
           <option value="tag">Tag</option>
         </select>
+        {inv && (
+          <span className="help" style={{ marginLeft: 'auto' }}>
+            <Badge kind={epStats.reachable === epStats.total ? 'ok' : 'warn'}>{epStats.reachable}/{epStats.total} Endpoints erreichbar</Badge>
+          </span>
+        )}
       </div>
+
+      {epStats.unreachable.length > 0 && (
+        <div className="banner" style={{ marginBottom: 12 }}>
+          ⚠ Nicht erreichbar: {epStats.unreachable.map((e) => e.name).join(', ')}
+        </div>
+      )}
 
       {error && <div className="banner">{error}</div>}
       {loading && !data && !inv && <div className="spinner">Lade Nodes…</div>}

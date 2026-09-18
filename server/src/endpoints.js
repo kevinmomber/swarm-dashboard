@@ -277,6 +277,11 @@ export async function inventory() {
         reachable: true,
         dockerVersion: info.ServerVersion,
         type: info.Swarm?.ControlAvailable ? 'swarm' : isSwarm ? 'swarm-worker' : 'standalone',
+        containers: info.Containers ?? null,
+        containersRunning: info.ContainersRunning ?? null,
+        images: info.Images ?? null,
+        ncpu: info.NCPU ?? null,
+        memTotal: info.MemTotal ?? null,
       };
       if (info.Swarm?.ControlAvailable) {
         // Manager: enumerate real swarm nodes.

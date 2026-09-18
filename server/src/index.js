@@ -26,6 +26,7 @@ import securityRouter from './routes/security.js';
 import pkiRouter from './routes/pki.js';
 import builderRouter from './routes/builder.js';
 import auditRouter from './routes/audit.js';
+import endpointsRouter from './routes/endpoints.js';
 import { auditMiddleware } from './audit.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
@@ -61,6 +62,7 @@ api.use('/security', securityRouter);
 api.use('/pki', pkiRouter);
 api.use('/builder', builderRouter);
 api.use('/audit', auditRouter);
+api.use('/endpoints', endpointsRouter);
 api.use('/', clusterRouter); // /containers /images
 api.use('/', miscRouter); // /networks /volumes /secrets /configs
 app.use('/api', api);

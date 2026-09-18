@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useApi } from '../components/useApi.js';
-import { Badge, Modal, stateKind, bytes, short, useToast, Copy } from '../components/ui.jsx';
+import { Badge, Modal, stateKind, bytes, short, useToast, Copy, usePersistentState } from '../components/ui.jsx';
 
 function Bar({ pct, caption }) {
   const p = pct == null ? null : Math.max(0, Math.min(100, pct));
@@ -28,6 +29,13 @@ function MetricCard({ label, value, sub, pct }) {
 
 const pctOf = (used, total) => (total ? Math.round((used / total) * 100) : null);
 
+const typeBadge = (t) => {
+  if (t === 'swarm') return <Badge kind="info">Swarm</Badge>;
+  if (t === 'swarm-worker') return <Badge kind="muted">Swarm-Worker</Badge>;
+  if (t === 'standalone') return <Badge kind="ok">Standalone</Badge>;
+  return <Badge kind="muted">{t || '?'}</Badge>;
+};
+
 // CPU cell: live load% if agent/probe present, else reserved%.
 function CpuCell({ n }) {
   if (n.live) return <Bar pct={n.live.cpu.loadPct} caption={`load ${n.live.cpu.load1?.toFixed?.(2) ?? '–'}`} />;
@@ -51,10 +59,12 @@ function DiskCell({ n }) {
 export default function Nodes() {
   const { data, error, loading, reload } = useApi('/nodes', { poll: 8000 });
   const { data: metrics } = useApi('/nodes/metrics', { poll: 20000 });
+  const { data: inv, reload: reloadInv } = useApi('/endpoints/inventory', { poll: 10000 });
   const toast = useToast();
   const [removeTarget, setRemoveTarget] = useState(null);
   const [confirmChk, setConfirmChk] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [groupBy, setGroupBy] = usePersistentState('nodes.groupBy', 'endpoint'); // 'endpoint' | 'tag'
 
   const setAvailability = async (id, availability) => {
     try {
@@ -72,16 +82,109 @@ export default function Nodes() {
     } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
   };
 
+  const refreshAll = () => { reload(); reloadInv(); };
+
   const connected = (data || []).find((n) => n.connected);
   const anyAgent = (data || []).some((n) => n.live?.source === 'agent');
-  // Prefer connected node's own live block; fall back to /metrics probe.
   const m = connected?.live || (metrics && !metrics.error ? metrics : null);
+
+  // Rich local metrics keyed by node id (agent/probe live data + actions).
+  const localById = useMemo(() => {
+    const map = new Map();
+    for (const n of data || []) map.set(n.id, n);
+    return map;
+  }, [data]);
+
+  // Build the grouped structure from the aggregated inventory.
+  const groups = useMemo(() => {
+    const eps = inv || [];
+    if (groupBy === 'tag') {
+      const byTag = new Map();
+      const add = (tag, ep) => {
+        if (!byTag.has(tag)) byTag.set(tag, []);
+        byTag.get(tag).push(ep);
+      };
+      for (const ep of eps) {
+        const tags = ep.tags && ep.tags.length ? ep.tags : ['Ohne Tag'];
+        for (const t of tags) add(t, ep);
+      }
+      return [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, endpoints]) => ({ key, label: key, endpoints }));
+    }
+    // group-by endpoint: one group per endpoint
+    return eps.map((ep) => ({ key: ep.id, label: ep.name, endpoints: [ep] }));
+  }, [inv, groupBy]);
+
+  const NodeRow = ({ ep, n }) => {
+    const local = ep.id === 'local' ? localById.get(n.id) : null;
+    const canAct = ep.id === 'local' && !ep.readOnly && n.role !== 'standalone';
+    return (
+      <tr>
+        <td>
+          <div style={{ fontWeight: 600 }}>
+            {n.hostname} {local?.connected && <Badge kind="info">verbunden</Badge>}
+            {local?.live?.source === 'agent' && <Badge kind="ok">agent{local.agentVersion ? ` v${local.agentVersion}` : ''}</Badge>}
+          </div>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>{short(n.id)}<Copy text={n.id} />{n.addr ? ` · ${n.addr}` : ''}</div>
+        </td>
+        <td>{n.role === 'manager'
+          ? <Badge kind={n.leader ? 'info' : 'muted'}>{n.leader ? 'Leader' : 'Manager'}</Badge>
+          : n.role === 'standalone' ? <Badge kind="ok">Host</Badge> : <Badge kind="muted">Worker</Badge>}</td>
+        <td><Badge kind={stateKind(n.state)}>{n.state}</Badge></td>
+        <td><Badge kind={stateKind(n.availability)}>{n.availability}</Badge></td>
+        <td>{local ? <CpuCell n={local} /> : <span className="help mono" style={{ fontSize: 11 }}>{n.ncpu ? `${n.ncpu} CPU` : '–'}</span>}</td>
+        <td>{local ? <RamCell n={local} /> : <span className="help mono" style={{ fontSize: 11 }}>{n.memTotal ? bytes(n.memTotal) : '–'}</span>}</td>
+        <td>{local ? <DiskCell n={local} /> : <span className="help mono" style={{ fontSize: 11 }}>{n.engine ? `v${n.engine}` : '–'}</span>}</td>
+        <td>
+          {canAct ? (
+            <div className="actions">
+              <button className="btn sm" disabled={n.availability === 'active'} onClick={() => setAvailability(n.id, 'active')}>Aktivieren</button>
+              <button className="btn sm" disabled={n.availability === 'pause'} onClick={() => setAvailability(n.id, 'pause')}>Pause</button>
+              <button className="btn sm" disabled={n.availability === 'drain'} onClick={() => setAvailability(n.id, 'drain')}>Drain</button>
+              <button className="btn sm danger" disabled={local?.connected} title={local?.connected ? 'Verbundener Node' : ''} onClick={() => { setRemoveTarget(n); setConfirmChk(false); }}>Entfernen</button>
+            </div>
+          ) : <span className="help">{ep.readOnly ? 'read-only' : n.role === 'standalone' ? 'Host' : '—'}</span>}
+        </td>
+      </tr>
+    );
+  };
+
+  const EndpointBlock = ({ ep }) => (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>{ep.name}</span>
+        {ep.builtin && <Badge kind="muted">lokal</Badge>}
+        {typeBadge(ep.type)}
+        {ep.reachable
+          ? <Badge kind="ok">erreichbar</Badge>
+          : <Badge kind="err">nicht erreichbar</Badge>}
+        {ep.readOnly && <Badge kind="warn">read-only</Badge>}
+        {(ep.tags || []).map((t) => <Badge key={t} kind="info">{t}</Badge>)}
+        <span className="help" style={{ marginLeft: 'auto' }}>
+          {ep.reachable ? `${ep.nodes?.length || 0} Node(s) · Docker ${ep.dockerVersion || '?'}` : (ep.error || 'Verbindung fehlgeschlagen')}
+        </span>
+      </div>
+      {ep.reachable && ep.nodes?.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Hostname</th><th>Rolle</th><th>Status</th><th>Verfügbarkeit</th><th>CPU</th><th>RAM</th><th>Disk/Engine</th><th>Aktionen</th>
+            </tr></thead>
+            <tbody>{ep.nodes.map((n) => <NodeRow key={`${ep.id}/${n.id}`} ep={ep} n={n} />)}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
       <div className="page-head">
-        <div><h1>Nodes</h1><div className="sub">Manager- und Worker-Knoten im Swarm</div></div>
-        <button className="btn" onClick={reload}>↻ Aktualisieren</button>
+        <div><h1>Nodes</h1><div className="sub">Knoten & Hosts über alle Docker-Endpoints</div></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Link className="btn" to="/settings">＋ Endpoints verwalten</Link>
+          <button className="btn" onClick={refreshAll}>↻ Aktualisieren</button>
+        </div>
       </div>
 
       {m && connected && (
@@ -100,55 +203,33 @@ export default function Nodes() {
         </>
       )}
 
-      {error && <div className="banner">{error}</div>}
-      {loading && !data && <div className="spinner">Lade Nodes…</div>}
+      <div className="toolbar" style={{ marginBottom: 12 }}>
+        <label style={{ margin: 0 }}>Gruppieren nach:</label>
+        <select style={{ width: 160 }} value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+          <option value="endpoint">Endpoint (Zugehörigkeit)</option>
+          <option value="tag">Tag</option>
+        </select>
+      </div>
 
-      {data && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Hostname</th><th>Rolle</th><th>Status</th><th>Verfügbarkeit</th>
-                <th>CPU</th><th>RAM</th><th>Disk</th><th>Aktionen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((n) => (
-                <tr key={n.id}>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>
-                      {n.hostname} {n.connected && <Badge kind="info">verbunden</Badge>}
-                      {n.live?.source === 'agent' && <Badge kind="ok">agent{n.agentVersion ? ` v${n.agentVersion}` : ''}</Badge>}
-                    </div>
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>{short(n.id)}<Copy text={n.id} /> · {n.addr}</div>
-                  </td>
-                  <td>{n.role === 'manager'
-                    ? <Badge kind={n.leader ? 'info' : 'muted'}>{n.leader ? 'Leader' : 'Manager'}</Badge>
-                    : <Badge kind="muted">Worker</Badge>}</td>
-                  <td><Badge kind={stateKind(n.state)}>{n.state}</Badge></td>
-                  <td><Badge kind={stateKind(n.availability)}>{n.availability}</Badge></td>
-                  <td><CpuCell n={n} /></td>
-                  <td><RamCell n={n} /></td>
-                  <td><DiskCell n={n} /></td>
-                  <td>
-                    <div className="actions">
-                      <button className="btn sm" disabled={n.availability === 'active'} onClick={() => setAvailability(n.id, 'active')}>Aktivieren</button>
-                      <button className="btn sm" disabled={n.availability === 'pause'} onClick={() => setAvailability(n.id, 'pause')}>Pause</button>
-                      <button className="btn sm" disabled={n.availability === 'drain'} onClick={() => setAvailability(n.id, 'drain')}>Drain</button>
-                      <button className="btn sm danger" disabled={n.connected} title={n.connected ? 'Verbundener Node' : ''} onClick={() => { setRemoveTarget(n); setConfirmChk(false); }}>Entfernen</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {error && <div className="banner">{error}</div>}
+      {loading && !data && !inv && <div className="spinner">Lade Nodes…</div>}
+
+      {groups.map((g) => (
+        <div key={g.key} style={{ marginBottom: 8 }}>
+          {groupBy === 'tag' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 2px 8px' }}>
+              <Badge kind="info">{g.label}</Badge>
+              <span className="help">{g.endpoints.length} Endpoint(s)</span>
+            </div>
+          )}
+          {g.endpoints.map((ep) => <EndpointBlock key={`${g.key}/${ep.id}`} ep={ep} />)}
         </div>
-      )}
+      ))}
 
       <div className="help" style={{ marginTop: 12 }}>
         {anyAgent
-          ? 'CPU/RAM/Disk zeigen die echte Live-Auslastung je Node (via Node-Agent). Ohne Agent zeigt die CPU/RAM-Spalte die reservierte Kapazität.'
-          : 'CPU/RAM zeigen aktuell die durch Task-Reservierungen belegte Kapazität. Für echte Live-Werte je Node den Node-Agenten (globaler Service swarmdash-agent) deployen — siehe README.'}
+          ? 'CPU/RAM/Disk zeigen die echte Live-Auslastung je Node (via Node-Agent). Ohne Agent zeigt die CPU/RAM-Spalte die reservierte Kapazität. Remote-Endpoints werden aktuell read-only angezeigt (Schreibaktionen folgen in Phase 2).'
+          : 'CPU/RAM zeigen aktuell die durch Task-Reservierungen belegte Kapazität. Remote-Endpoints werden read-only angezeigt (Schreibaktionen folgen in Phase 2). Für echte Live-Werte je Node den Node-Agenten deployen.'}
       </div>
 
       {removeTarget && (

@@ -65,6 +65,9 @@ const DEFAULTS = {
     thresholds: { cpu: 90, mem: 90, disk: 90 }, // percent
     serviceTag: 'true', // monitor services labelled swarmdash.monitor=<tag>
     mqttStatus: true, // publish periodic status messages to MQTT
+    certExpiryDays: 30, // alert when a CA/cert expires within this many days
+    checkCertExpiry: true, // proactive PKI expiry alerts
+    checkEndpoints: true, // alert when a registered Docker endpoint is unreachable
     alerts: {
       webhook: { enabled: false, url: '' },
       matrix: { enabled: false, homeserver: '', accessToken: '', roomId: '' },

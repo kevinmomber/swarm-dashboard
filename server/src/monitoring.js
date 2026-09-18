@@ -3,6 +3,10 @@ import nodemailer from 'nodemailer';
 import { docker, requireManager } from './docker.js';
 import { agentMetrics } from './metrics.js';
 import { loadSettings, saveSettings, appendMonitorLog, MONITOR_LABEL } from './settings.js';
+import { getCaStatus, listCerts } from './pki.js';
+import { inventory } from './endpoints.js';
+
+const daysUntil = (iso) => (iso ? Math.floor((new Date(iso).getTime() - Date.now()) / 86400000) : null);
 
 let timer = null;
 let mqttClient = null;
@@ -99,7 +103,7 @@ async function runChecks() {
   ensureMqtt(mon.alerts.mqtt);
   const prefix = mon.alerts.mqtt.topicPrefix || 'swarmdash';
 
-  const snapshot = { at: new Date().toISOString(), nodes: [], services: [] };
+  const snapshot = { at: new Date().toISOString(), nodes: [], services: [], certs: [], endpoints: [] };
 
   // --- Nodes ---
   try {
@@ -141,7 +145,41 @@ async function runChecks() {
     }
   } catch (e) { console.warn('Service-Check fehlgeschlagen:', e.message); }
 
-  const allHealthy = snapshot.nodes.every((n) => n.healthy) && snapshot.services.every((s) => s.healthy);
+  // --- PKI certificate expiry (proactive) ---
+  if (mon.checkCertExpiry) {
+    try {
+      const limit = Number(mon.certExpiryDays) || 30;
+      const items = [];
+      const ca = await getCaStatus();
+      if (ca?.exists && ca.notAfter) items.push({ name: `CA · ${ca.cn}`, notAfter: ca.notAfter });
+      for (const c of await listCerts()) {
+        if (c.status === 'revoked') continue;
+        if (c.notAfter) items.push({ name: c.cn, notAfter: c.notAfter });
+      }
+      for (const it of items) {
+        const d = daysUntil(it.notAfter);
+        const healthy = d == null || d > limit;
+        snapshot.certs.push({ name: it.name, days: d, healthy });
+        await evaluate(`cert:${it.name}`, healthy, d < 0 ? 'Zertifikat abgelaufen' : `Zertifikat läuft in ${d} Tagen ab`);
+      }
+    } catch (e) { console.warn('Cert-Check fehlgeschlagen:', e.message); }
+  }
+
+  // --- Registered Docker endpoints reachable? ---
+  if (mon.checkEndpoints) {
+    try {
+      const inv = await inventory();
+      for (const ep of inv) {
+        if (ep.builtin) continue; // local endpoint is the dashboard itself
+        snapshot.endpoints.push({ name: ep.name, healthy: ep.reachable });
+        await evaluate(`endpoint:${ep.name}`, ep.reachable, ep.error || 'Endpoint nicht erreichbar');
+        if (mon.mqttStatus) mqttPublish(`${prefix}/endpoint/${ep.name}/status`, { reachable: ep.reachable });
+      }
+    } catch (e) { console.warn('Endpoint-Check fehlgeschlagen:', e.message); }
+  }
+
+  const allHealthy = snapshot.nodes.every((n) => n.healthy) && snapshot.services.every((s) => s.healthy)
+    && snapshot.certs.every((c) => c.healthy) && snapshot.endpoints.every((e) => e.healthy);
   if (mon.mqttStatus) mqttPublish(`${prefix}/health`, { healthy: allHealthy, at: snapshot.at });
   lastSnapshot = snapshot;
 }
@@ -167,6 +205,8 @@ export async function getStatus() {
     lastRun: lastSnapshot.at,
     nodes: lastSnapshot.nodes,
     services: lastSnapshot.services,
+    certs: lastSnapshot.certs || [],
+    endpoints: lastSnapshot.endpoints || [],
     mqttConnected: Boolean(mqttClient && mqttClient.connected),
     log: (settings.monitorLog || []).slice(-100).reverse(),
   };

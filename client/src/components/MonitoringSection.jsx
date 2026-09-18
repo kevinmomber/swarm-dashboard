@@ -21,6 +21,7 @@ export default function MonitoringSection() {
     monitoring: {
       enabled: m.enabled, intervalSec: Number(m.intervalSec) || 60,
       thresholds: m.thresholds, serviceTag: m.serviceTag, mqttStatus: m.mqttStatus,
+      certExpiryDays: Number(m.certExpiryDays) || 30, checkCertExpiry: !!m.checkCertExpiry, checkEndpoints: !!m.checkEndpoints,
       alerts: {
         webhook: { enabled: A.webhook.enabled, url: A.webhook.url },
         matrix: { enabled: A.matrix.enabled, homeserver: A.matrix.homeserver, roomId: A.matrix.roomId, ...(sec.matrix ? { accessToken: sec.matrix } : {}) },
@@ -66,6 +67,18 @@ export default function MonitoringSection() {
         <div className="field"><label>RAM-Schwelle %</label><input type="number" value={m.thresholds.mem} onChange={(e) => setTh('mem', e.target.value)} /></div>
         <div className="field"><label>Disk-Schwelle %</label><input type="number" value={m.thresholds.disk} onChange={(e) => setTh('disk', e.target.value)} /></div>
         <div className="field"><label>Service-Tag (swarmdash.monitor=)</label><input value={m.serviceTag} onChange={(e) => setM({ ...m, serviceTag: e.target.value })} placeholder="true" /></div>
+        <div className="field"><label>Zert-Warnung ab (Tage)</label><input type="number" min="1" value={m.certExpiryDays ?? 30} onChange={(e) => setM({ ...m, certExpiryDays: Number(e.target.value) })} /></div>
+      </div>
+
+      <div className="form-grid">
+        <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <label className="switch"><input type="checkbox" checked={!!m.checkCertExpiry} onChange={(e) => setM({ ...m, checkCertExpiry: e.target.checked })} /><span className="slider" /></label>
+          <label style={{ margin: 0 }}>Zertifikatsablauf überwachen</label>
+        </div>
+        <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <label className="switch"><input type="checkbox" checked={!!m.checkEndpoints} onChange={(e) => setM({ ...m, checkEndpoints: e.target.checked })} /><span className="slider" /></label>
+          <label style={{ margin: 0 }}>Docker-Endpoints überwachen</label>
+        </div>
       </div>
 
       <h3 style={{ margin: '16px 0 4px', fontSize: 14 }}>Alarmkanäle</h3>
@@ -116,7 +129,7 @@ export default function MonitoringSection() {
         {status && <span className="badge info" style={{ alignSelf: 'center' }}>{status.enabled ? 'aktiv' : 'inaktiv'}{status.mqttConnected ? ' · MQTT verbunden' : ''}</span>}
       </div>
 
-      {status && (status.nodes.length > 0 || status.services.length > 0) && (
+      {status && (status.nodes.length > 0 || status.services.length > 0 || status.certs?.length > 0 || status.endpoints?.length > 0) && (
         <div style={{ marginTop: 16 }}>
           <label>Aktueller Zustand{status.lastRun ? ` · ${ago(status.lastRun)}` : ''}</label>
           <div className="pill-group" style={{ marginTop: 6 }}>
@@ -125,6 +138,12 @@ export default function MonitoringSection() {
             ))}
             {status.services.map((s) => (
               <Badge key={s.name} kind={s.healthy ? 'ok' : 'err'}>{s.name}: {s.running}/{s.desired}</Badge>
+            ))}
+            {(status.certs || []).map((c) => (
+              <Badge key={c.name} kind={c.healthy ? 'ok' : c.days < 0 ? 'err' : 'warn'}>🔐 {c.name}: {c.days < 0 ? 'abgelaufen' : `${c.days} T`}</Badge>
+            ))}
+            {(status.endpoints || []).map((e) => (
+              <Badge key={e.name} kind={e.healthy ? 'ok' : 'err'}>🖥 {e.name}: {e.healthy ? 'erreichbar' : 'offline'}</Badge>
             ))}
           </div>
         </div>

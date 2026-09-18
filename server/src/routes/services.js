@@ -200,6 +200,9 @@ router.get('/:id/config', async (req, res, next) => {
     const mounts = (cs.Mounts || []).map((m) => ({
       type: m.Type || 'volume', source: m.Source || '', target: m.Target || '', readOnly: !!m.ReadOnly,
     }));
+    const resNano = spec.TaskTemplate?.Resources || {};
+    const toCpus = (nano) => (nano ? Math.round((nano / 1e9) * 100) / 100 : '');
+    const toMb = (bytes) => (bytes ? Math.round(bytes / (1024 * 1024)) : '');
     res.json({
       id: info.ID,
       name: spec.Name,
@@ -213,6 +216,10 @@ router.get('/:id/config', async (req, res, next) => {
       mounts,
       networks,
       availableNetworks,
+      cpuLimit: toCpus(resNano.Limits?.NanoCPUs),
+      memLimit: toMb(resNano.Limits?.MemoryBytes),
+      cpuReservation: toCpus(resNano.Reservations?.NanoCPUs),
+      memReservation: toMb(resNano.Reservations?.MemoryBytes),
     });
   } catch (err) {
     next(err);
@@ -260,6 +267,20 @@ router.post('/:id/edit', async (req, res, next) => {
       const nets = await docker.listNetworks();
       const idByName = new Map(nets.map((n) => [n.Name, n.Id]));
       spec.TaskTemplate.Networks = patch.networks.map((nn) => ({ Target: idByName.get(nn) || nn }));
+    }
+    // Resource limits / reservations (CPUs and Memory in MB from the UI).
+    const hasRes = ['cpuLimit', 'memLimit', 'cpuReservation', 'memReservation'].some((k) => patch[k] !== undefined);
+    if (hasRes) {
+      const nano = (cpus) => (cpus === '' || cpus == null ? undefined : Math.round(Number(cpus) * 1e9));
+      const bytes = (mb) => (mb === '' || mb == null ? undefined : Math.round(Number(mb) * 1024 * 1024));
+      const r = spec.TaskTemplate.Resources || {};
+      const limits = { ...(r.Limits || {}) };
+      const reservations = { ...(r.Reservations || {}) };
+      if (patch.cpuLimit !== undefined) { const v = nano(patch.cpuLimit); if (v) limits.NanoCPUs = v; else delete limits.NanoCPUs; }
+      if (patch.memLimit !== undefined) { const v = bytes(patch.memLimit); if (v) limits.MemoryBytes = v; else delete limits.MemoryBytes; }
+      if (patch.cpuReservation !== undefined) { const v = nano(patch.cpuReservation); if (v) reservations.NanoCPUs = v; else delete reservations.NanoCPUs; }
+      if (patch.memReservation !== undefined) { const v = bytes(patch.memReservation); if (v) reservations.MemoryBytes = v; else delete reservations.MemoryBytes; }
+      spec.TaskTemplate.Resources = { Limits: limits, Reservations: reservations };
     }
     spec.TaskTemplate.ForceUpdate = (spec.TaskTemplate.ForceUpdate || 0) + 1;
     await svc.update({ version: info.Version.Index, ...spec });

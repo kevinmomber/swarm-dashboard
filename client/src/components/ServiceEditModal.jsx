@@ -29,6 +29,10 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
   const [mounts, setMounts] = useState([]);
   const [networks, setNetworks] = useState([]);
   const [availableNetworks, setAvailableNetworks] = useState([]);
+  const [cpuLimit, setCpuLimit] = useState('');
+  const [memLimit, setMemLimit] = useState('');
+  const [cpuRes, setCpuRes] = useState('');
+  const [memRes, setMemRes] = useState('');
   const [tab, setTab] = useState('general');
   const [runtime, setRuntime] = useState(null); // { containerId, nodeId, image }
 
@@ -54,6 +58,10 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
         setMounts((c.mounts || []).map((m) => ({ type: m.type || 'volume', source: m.source || '', target: m.target || '', readOnly: !!m.readOnly })));
         setNetworks(c.networks || []);
         setAvailableNetworks(c.availableNetworks || []);
+        setCpuLimit(c.cpuLimit === '' || c.cpuLimit == null ? '' : String(c.cpuLimit));
+        setMemLimit(c.memLimit === '' || c.memLimit == null ? '' : String(c.memLimit));
+        setCpuRes(c.cpuReservation === '' || c.cpuReservation == null ? '' : String(c.cpuReservation));
+        setMemRes(c.memReservation === '' || c.memReservation == null ? '' : String(c.memReservation));
       })
       .catch((e) => alive && setErr(e.message));
     return () => { alive = false; };
@@ -79,6 +87,10 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
         .filter((m) => m.source.trim() && m.target.trim())
         .map((m) => ({ type: m.type, source: m.source.trim(), target: m.target.trim(), readOnly: !!m.readOnly })),
       networks,
+      cpuLimit: cpuLimit.trim(),
+      memLimit: memLimit.trim(),
+      cpuReservation: cpuRes.trim(),
+      memReservation: memRes.trim(),
     };
     if (cfg?.mode === 'replicated' && replicas !== '') patch.replicas = replicas;
     const argsTrim = argsText.trim();
@@ -198,6 +210,16 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
                 ))}
               </div>
             )}
+          </div>
+          <div className="field">
+            <label>Ressourcen-Limits & Reservierungen</label>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div><div className="help">CPU-Limit (Kerne)</div><input style={{ width: 120 }} value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} placeholder="z. B. 0.5" /></div>
+              <div><div className="help">RAM-Limit (MB)</div><input style={{ width: 120 }} value={memLimit} onChange={(e) => setMemLimit(e.target.value)} placeholder="z. B. 512" /></div>
+              <div><div className="help">CPU-Reservierung</div><input style={{ width: 120 }} value={cpuRes} onChange={(e) => setCpuRes(e.target.value)} placeholder="z. B. 0.25" /></div>
+              <div><div className="help">RAM-Reservierung (MB)</div><input style={{ width: 140 }} value={memRes} onChange={(e) => setMemRes(e.target.value)} placeholder="z. B. 256" /></div>
+            </div>
+            <div className="help" style={{ marginTop: 4 }}>Leer lassen = kein Limit/keine Reservierung. Limit = harte Obergrenze, Reservierung = garantierte Mindestkapazität für die Platzierung.</div>
           </div>
           <div className="field">
             <label>Command / Args (optional)</label>

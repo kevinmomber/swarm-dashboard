@@ -32,6 +32,7 @@ import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
 import { startMetricsSampler } from './metricshistory.js';
 import { applyGitopsSchedule } from './gitops.js';
+import { renderMetrics } from './prometheus.js';
 import { resolveRunningContainer } from './serviceops.js';
 import { agentBaseForNode } from './metrics.js';
 import { authGuard, isEnabled, verifyToken, roleGuard } from './auth.js';
@@ -69,6 +70,17 @@ api.use('/endpoints', endpointsRouter);
 api.use('/', clusterRouter); // /containers /images
 api.use('/', miscRouter); // /networks /volumes /secrets /configs
 app.use('/api', api);
+
+// --- Prometheus scrape endpoint (no auth; standard for scrapers) ---
+app.get('/metrics', async (req, res) => {
+  try {
+    const body = await renderMetrics();
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.send(body);
+  } catch (e) {
+    res.status(500).send(`# error ${e.message}\n`);
+  }
+});
 
 // --- Static client (built with Vite) ---
 const clientDir = path.resolve(__dirname, '../../client/dist');

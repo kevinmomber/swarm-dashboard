@@ -53,6 +53,7 @@ export default function MonitoringSection() {
     <div className="card section">
       <h2>Monitoring &amp; Alerting</h2>
       <div className="desc">Überwacht Nodes und per Label <span className="kbd">swarmdash.monitor</span> ausgewählte Services; alarmiert und meldet Status per MQTT.</div>
+      <div className="help" style={{ marginBottom: 10 }}>📊 Prometheus-Metriken werden unter <span className="kbd">/metrics</span> im Standard-Textformat exponiert (ohne Auth scrapbar).</div>
 
       <div className="form-row">
         <div className="rl"><div className="t">Monitoring aktiv</div><div className="h">Prüfintervall in Sekunden.</div></div>

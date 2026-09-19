@@ -142,6 +142,27 @@ router.post('/volumes/action', async (req, res, next) => {
     res.json(await volumeRemove(nodeId, name, force));
   } catch (err) { next(err); }
 });
+router.post('/volumes/bulk-action', async (req, res, next) => {
+  try {
+    const { action, force, items } = req.body || {};
+    if (action !== 'remove') return res.status(400).json({ error: 'Unbekannte Aktion' });
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'items erforderlich' });
+    const results = [];
+    for (const it of items) {
+      const name = it?.name;
+      const nodeId = it?.nodeId ?? null;
+      if (!name) { results.push({ name: name || '?', nodeId, ok: false, error: 'name fehlt' }); continue; }
+      try {
+        await volumeRemove(nodeId, name, !!force);
+        results.push({ name, nodeId, ok: true });
+      } catch (e) {
+        results.push({ name, nodeId, ok: false, error: e.message });
+      }
+    }
+    const ok = results.filter((r) => r.ok).length;
+    res.json({ ok, failed: results.length - ok, total: results.length, results });
+  } catch (err) { next(err); }
+});
 router.post('/volumes/create', async (req, res, next) => {
   try {
     const { nodeId, name, driver, labels, driverOpts } = req.body || {};

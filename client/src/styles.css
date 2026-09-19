@@ -123,6 +123,7 @@ td .mono { font-size: 12.5px; }
 .containers-table .cell-name > div:first-child { overflow-wrap: anywhere; word-break: break-word; }
 .containers-table .cell-image { max-width: 260px; overflow-wrap: anywhere; word-break: break-word; }
 .containers-table tr.row-selected { background: rgba(88,166,255,.10); }
+tbody tr.row-selected, tbody tr.row-selected:hover { background: rgba(88,166,255,.14); }
 .containers-table td, .containers-table th { vertical-align: top; }
 .containers-table .actions { white-space: nowrap; }
 

@@ -701,6 +701,96 @@ function VolumeAdd({ onClose, onDone }) {
   );
 }
 
+function BulkVolumeDelete({ items, onClose, onDone }) {
+  const toast = useToast();
+  const [chk, setChk] = useState(false);
+  const [force, setForce] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null); // [{ name, ok, error }]
+
+  const inUseCount = items.filter((i) => i.inUse).length;
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const payload = { action: 'remove', force, items: items.map((i) => ({ name: i.name, nodeId: i.nodeId || null })) };
+      const res = await api.post('/volumes/bulk-action', payload);
+      setResults(res.results || []);
+      if (res.failed === 0) {
+        toast(`${res.ok} Volume(s) gelöscht`);
+        onDone();
+      } else {
+        toast(`${res.ok} gelöscht, ${res.failed} fehlgeschlagen`, 'err');
+      }
+    } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal wide title={`Volumes löschen (${items.length})`} onClose={busy ? undefined : onClose}
+      footer={<>
+        <button className="btn" disabled={busy} onClick={onClose}>{results ? 'Schließen' : 'Abbrechen'}</button>
+        {!results && (
+          <button className="btn danger" disabled={busy || !chk} onClick={run}>
+            {busy ? 'Lösche…' : `${items.length} Volume(s) löschen`}
+          </button>
+        )}
+      </>}>
+      {!results && (
+        <>
+          <div className="help" style={{ marginBottom: 10 }}>
+            Die folgenden Volumes werden endgültig entfernt. In Verwendung befindliche Volumes lassen sich
+            nur mit „Erzwingen" löschen und können dabei laufende Container beeinträchtigen.
+          </div>
+          <div className="table-wrap" style={{ maxHeight: 260, overflow: 'auto', marginBottom: 12 }}>
+            <table>
+              <thead><tr><th>Name</th><th>Node</th><th>Verwendung</th></tr></thead>
+              <tbody>
+                {items.map((i) => (
+                  <tr key={`${i.nodeId || i.node || ''}/${i.name}`}>
+                    <td className="mono" style={{ fontWeight: 600 }}>{i.name}</td>
+                    <td>{i.node || '—'}</td>
+                    <td>{i.inUse ? <Badge kind="ok">in Verwendung</Badge> : <Badge kind="muted">ungenutzt</Badge>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {inUseCount > 0 && (
+            <div className="banner" style={{ marginBottom: 10 }}>
+              {inUseCount} der {items.length} Volumes sind in Verwendung. Ohne „Erzwingen" schlägt deren Löschung fehl.
+            </div>
+          )}
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', marginBottom: 8 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={force} onChange={(e) => setForce(e.target.checked)} disabled={busy} />
+            Löschen erzwingen (auch Volumes in Verwendung)
+          </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={chk} onChange={(e) => setChk(e.target.checked)} disabled={busy} />
+            Ich bestätige, dass ich diese {items.length} Volume(s) endgültig löschen möchte.
+          </label>
+        </>
+      )}
+      {results && (
+        <div className="table-wrap" style={{ maxHeight: 320, overflow: 'auto' }}>
+          <table>
+            <thead><tr><th>Name</th><th>Ergebnis</th></tr></thead>
+            <tbody>
+              {results.map((r) => (
+                <tr key={`${r.nodeId || ''}/${r.name}`}>
+                  <td className="mono" style={{ fontWeight: 600 }}>{r.name}</td>
+                  <td>{r.ok
+                    ? <Badge kind="ok">gelöscht</Badge>
+                    : <><Badge kind="err">Fehler</Badge> <span className="help">{r.error}</span></>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export default function Resources() {
   const toast = useToast();
   const [tab, setTab] = usePersistentState('resources.tab', 'networks');
@@ -720,6 +810,8 @@ export default function Resources() {
   const [secQ, setSecQ] = useState('');
   const [secDelChk, setSecDelChk] = useState(false);
   const [secDel, setSecDel] = useState(null); // secret row pending delete
+  const [volSel, setVolSel] = useState(() => new Set()); // keys of selected volumes
+  const [bulkDel, setBulkDel] = useState(null); // { items } pending bulk delete
 
   const stackCol = (row) => (row.stack ? <Badge kind="muted">{row.stack}</Badge> : '–');
 
@@ -742,6 +834,24 @@ export default function Resources() {
           || (b.stack || '').toLowerCase().includes(t);
       })
     : [];
+
+  const volKey = (v) => `${v.nodeId || v.node || ''}/${v.name}`;
+  const selectedVols = volRows.filter((v) => volSel.has(volKey(v)));
+  const allVisibleSelected = volRows.length > 0 && selectedVols.length === volRows.length;
+  const toggleVol = (v) => setVolSel((prev) => {
+    const next = new Set(prev); const k = volKey(v);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+  const toggleAllVols = () => setVolSel((prev) => {
+    if (volRows.length > 0 && volRows.every((v) => prev.has(volKey(v)))) {
+      const next = new Set(prev); volRows.forEach((v) => next.delete(volKey(v))); return next;
+    }
+    const next = new Set(prev); volRows.forEach((v) => next.add(volKey(v))); return next;
+  });
+  const clearVolSel = () => setVolSel(new Set());
+
+  useEffect(() => { setVolSel(new Set()); }, [tab]);
 
   return (
     <>
@@ -774,6 +884,18 @@ export default function Resources() {
           </select>
           <div className="spacer" />
           <button className="btn primary" onClick={() => setVolAdd(true)}>＋ Volume anlegen</button>
+        </div>
+      )}
+
+      {tab === 'volumes' && data && selectedVols.length > 0 && (
+        <div className="toolbar" style={{ flexWrap: 'wrap', background: 'var(--bg-elev2)', borderRadius: 6, padding: '6px 10px', marginBottom: 12 }}>
+          <strong>{selectedVols.length}</strong>
+          <span>ausgewählt</span>
+          <div className="spacer" />
+          <button className="btn sm" onClick={clearVolSel}>Auswahl aufheben</button>
+          <button className="btn sm danger" onClick={() => setBulkDel({ items: selectedVols.map((v) => ({ name: v.name, nodeId: v.nodeId || null, node: v.node, inUse: v.inUse })) })}>
+            🗑 Auswahl löschen
+          </button>
         </div>
       )}
 
@@ -844,11 +966,21 @@ export default function Resources() {
             )}
             {tab === 'volumes' && (
               <>
-                <thead><tr><th>Name</th><th>Node</th><th>Driver</th><th>Scope</th><th>Verwendung</th><th>Mountpoint</th><th>Stack</th><th>Aktion</th></tr></thead>
+                <thead><tr>
+                  <th style={{ width: 32 }}>
+                    <input type="checkbox" style={{ width: 'auto' }} checked={allVisibleSelected}
+                      ref={(el) => { if (el) el.indeterminate = selectedVols.length > 0 && !allVisibleSelected; }}
+                      onChange={toggleAllVols} title="Alle sichtbaren aus-/abwählen" />
+                  </th>
+                  <th>Name</th><th>Node</th><th>Driver</th><th>Scope</th><th>Verwendung</th><th>Mountpoint</th><th>Stack</th><th>Aktion</th>
+                </tr></thead>
                 <tbody>
-                  {volRows.length === 0 && <tr><td colSpan={8} className="empty" style={{ padding: 18 }}>Keine Treffer.</td></tr>}
+                  {volRows.length === 0 && <tr><td colSpan={9} className="empty" style={{ padding: 18 }}>Keine Treffer.</td></tr>}
                   {volRows.map((v) => (
-                    <tr key={`${v.nodeId || v.node || ''}/${v.name}`}>
+                    <tr key={`${v.nodeId || v.node || ''}/${v.name}`} className={volSel.has(volKey(v)) ? 'row-selected' : ''}>
+                      <td>
+                        <input type="checkbox" style={{ width: 'auto' }} checked={volSel.has(volKey(v))} onChange={() => toggleVol(v)} />
+                      </td>
                       <td style={{ fontWeight: 600 }} className="mono">
                         <span className="link-name" onClick={() => setVolDetail(v)} title="Nutzung / Aktionen anzeigen">{v.name}</span>
                       </td>
@@ -944,6 +1076,11 @@ export default function Resources() {
       {cfgDetail && <ConfigDetail cfg={cfgDetail} onClose={() => setCfgDetail(null)} onDeleted={reload} />}
       {cfgAdd && <ConfigAdd onClose={() => setCfgAdd(false)} onDone={reload} />}
       {volAdd && <VolumeAdd onClose={() => setVolAdd(false)} onDone={reload} />}
+      {bulkDel && (
+        <BulkVolumeDelete items={bulkDel.items}
+          onClose={() => setBulkDel(null)}
+          onDone={() => { setBulkDel(null); clearVolSel(); reload(); }} />
+      )}
       {secAdd && <SecretAdd onClose={() => setSecAdd(false)} onDone={reload} />}
       {secDel && (
         <Modal title="Secret löschen" onClose={() => setSecDel(null)}

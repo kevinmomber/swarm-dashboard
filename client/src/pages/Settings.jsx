@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api.js';
+import { api, postSSE } from '../api.js';
 import { useApi } from '../components/useApi.js';
 import { useTheme } from '../components/theme.jsx';
 import { Badge, useToast, bytes, ago, Modal } from '../components/ui.jsx';
@@ -58,6 +58,7 @@ export default function Settings() {
   const [restore, setRestore] = useState(false);
   const [section, setSection] = useState('appearance');
   const [composeText, setComposeText] = useState(null); // string when compose modal open
+  const [runProg, setRunProg] = useState(null); // live backup progress: { jobName, total, items:[{name,label,state,bytes,error}], running }
 
   useEffect(() => {
     api.get('/settings').then((s) => {
@@ -129,12 +130,44 @@ export default function Settings() {
   const runJob = async (jobId) => {
     if (!confirm('Backup für diesen Job jetzt starten?')) return;
     setBusy(true);
+    setRunProg({ jobName: null, total: null, items: [], running: true, error: null });
+    let errMsg = null;
     try {
-      const r = await api.post('/backup/run', { jobId });
-      const ok = r.volumes.filter((v) => v.ok).length;
-      toast(`Backup ${r.status}: ${ok}/${r.volumes.length} Volumes`, r.status === 'failed' ? 'err' : 'ok');
+      await postSSE('/backup/run-stream', { jobId }, (ev) => {
+        if (ev.type === 'plan') {
+          setRunProg({
+            jobName: ev.jobName, total: ev.total, running: true, error: null,
+            items: (ev.volumes || []).map((v) => ({ name: v.name, label: v.label, type: v.type, state: 'pending', bytes: 0, error: null })),
+          });
+        } else if (ev.type === 'volume') {
+          setRunProg((p) => {
+            if (!p) return p;
+            const items = p.items.map((it) => {
+              if (it.name !== ev.name) return it;
+              if (ev.phase === 'start') return { ...it, state: 'start' };
+              if (ev.phase === 'copy') return { ...it, state: 'copy' };
+              if (ev.phase === 'copy-progress') return { ...it, state: 'copy', bytes: ev.bytes || it.bytes };
+              if (ev.phase === 'archive') return { ...it, state: 'archive' };
+              if (ev.phase === 'done') return { ...it, state: ev.ok ? 'done' : 'failed', bytes: ev.bytes || it.bytes, error: ev.error || null };
+              return it;
+            });
+            return { ...p, items };
+          });
+        } else if (ev.type === 'error') {
+          errMsg = ev.message;
+        } else if (ev.type === 'done') {
+          const e = ev.entry;
+          const ok = e.volumes.filter((v) => v.ok).length;
+          setRunProg((p) => ({ ...(p || { items: [] }), running: false, status: e.status, summary: `${ok}/${e.volumes.length}` }));
+          toast(`Backup ${e.status}: ${ok}/${e.volumes.length} Volumes`, e.status === 'failed' ? 'err' : 'ok');
+        }
+      });
+      if (errMsg) throw new Error(errMsg);
       reloadHist();
-    } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
+    } catch (e) {
+      setRunProg((p) => (p ? { ...p, running: false, error: e.message } : { running: false, error: e.message, items: [] }));
+      toast(e.message, 'err');
+    } finally { setBusy(false); }
   };
 
   const addJob = () => {
@@ -523,6 +556,61 @@ export default function Settings() {
             </table>
           )}
       </div>
+
+      {/* Live progress of a running/last manual backup */}
+      {runProg && (
+        <div className="card section">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div>
+              <h2 style={{ marginBottom: 2 }}>Backup-Fortschritt{runProg.jobName ? ` · ${runProg.jobName}` : ''}</h2>
+              <div className="help">
+                {runProg.running
+                  ? (runProg.total ? `Läuft… ${runProg.items.filter((i) => i.state === 'done' || i.state === 'failed').length}/${runProg.total} Volumes` : 'Backup wird vorbereitet…')
+                  : runProg.error ? 'Abgebrochen' : `Fertig · ${runProg.summary || ''}${runProg.status ? ` (${runProg.status})` : ''}`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {runProg.running && <span className="spinner-inline" style={{ width: 14, height: 14, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.8s linear infinite' }} />}
+              {!runProg.running && <button className="btn sm" onClick={() => setRunProg(null)}>Ausblenden</button>}
+            </div>
+          </div>
+          {runProg.error && <div className="banner" style={{ marginBottom: 8 }}>{runProg.error}</div>}
+          {runProg.total > 0 && (
+            <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-elev2)', overflow: 'hidden', marginBottom: 10 }}>
+              <div style={{
+                width: `${Math.round((runProg.items.filter((i) => i.state === 'done' || i.state === 'failed').length / runProg.total) * 100)}%`,
+                height: '100%', background: 'var(--accent)', transition: 'width .25s',
+              }} />
+            </div>
+          )}
+          {runProg.items.length > 0 && (
+            <div className="pill-group" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+              {runProg.items.map((it) => {
+                const label = {
+                  pending: 'wartet', start: 'startet…', copy: 'kopiere vom Node…', archive: 'archiviere…', done: 'fertig', failed: 'Fehler',
+                }[it.state] || it.state;
+                const kind = it.state === 'done' ? 'ok' : it.state === 'failed' ? 'err' : it.state === 'pending' ? 'muted' : 'info';
+                return (
+                  <div key={it.name} style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+                    <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 340 }}>{it.label || it.name}</span>
+                    <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {it.bytes > 0 && <span className="help" style={{ fontSize: 11 }}>{bytes(it.bytes)}</span>}
+                      <Badge kind={kind}>{label}</Badge>
+                    </span>
+                  </div>
+                );
+              })}
+              {runProg.items.some((i) => i.state === 'failed') && (
+                <div style={{ marginTop: 4 }}>
+                  {runProg.items.filter((i) => i.state === 'failed').map((i) => (
+                    <div key={i.name} style={{ color: 'var(--red)', fontSize: 11 }}><span className="mono">{i.label || i.name}</span>: {i.error || 'Fehler'}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* History */}
       <div className="card section">

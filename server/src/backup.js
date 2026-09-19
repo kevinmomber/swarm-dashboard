@@ -275,9 +275,10 @@ export async function restoreArchive({ volume, file, clean, nodeId }) {
 
 let running = false;
 
-export async function runBackup({ jobId = 'default', trigger = 'manual' } = {}) {
+export async function runBackup({ jobId = 'default', trigger = 'manual', onProgress } = {}) {
   if (running) throw new Error('Ein Backup läuft bereits');
   running = true;
+  const emit = (ev) => { try { onProgress?.(ev); } catch { /* ignore listener errors */ } };
   const started = new Date();
   const settings0 = await loadSettings();
   const job = (settings0.backup.jobs || []).find((j) => j.id === jobId);
@@ -319,12 +320,18 @@ export async function runBackup({ jobId = 'default', trigger = 'manual' } = {}) 
     const keep = Math.max(1, Number(job.retention) || 7);
     const stamp = ts();
 
+    const planned = [...volMap.values()].map((v) => ({ name: v.name, label: v.label || v.name, type: v.type || 'volume' }));
+    emit({ type: 'plan', jobName: job.name, total: planned.length, volumes: planned });
+
+    let index = 0;
     for (const vol of volMap.values()) {
+      index += 1;
       const remote = vol.nodeId && localId && vol.nodeId !== localId;
       const rec = {
         name: vol.name, label: vol.label || vol.name, type: vol.type || 'volume',
         nodeId: vol.nodeId || localId, file: null, bytes: 0, sourceBytes: null, ok: false, error: null,
       };
+      emit({ type: 'volume', phase: 'start', index, total: planned.length, name: vol.name, label: rec.label, remote: Boolean(remote) });
       let tmpVol = null;
       try {
         // The archive helper runs on the MANAGER and mounts the source by name.
@@ -338,14 +345,19 @@ export async function runBackup({ jobId = 'default', trigger = 'manual' } = {}) 
           if (vol.type === 'bind') {
             throw new Error(`Bind-Mount „${vol.label}" liegt auf Remote-Node und wird für Backups derzeit nicht unterstützt (nur Named Volumes)`);
           }
+          emit({ type: 'volume', phase: 'copy', index, total: planned.length, name: vol.name, label: rec.label });
           tmpVol = `swarmdash_bktmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-          await volumeDuplicate({ srcNodeId: vol.nodeId, name: vol.source, dstNodeId: localId, newName: tmpVol });
+          await volumeDuplicate({
+            srcNodeId: vol.nodeId, name: vol.source, dstNodeId: localId, newName: tmpVol,
+            onBytes: (b) => emit({ type: 'volume', phase: 'copy-progress', index, total: planned.length, name: vol.name, bytes: b }),
+          });
           mountSource = tmpVol;
         }
 
         // Node-aware apparent source size — used both as info and as a guard.
         const srcBytes = await volumeSizeOnNode(vol.nodeId, vol.source).catch(() => null);
         rec.sourceBytes = srcBytes;
+        emit({ type: 'volume', phase: 'archive', index, total: planned.length, name: vol.name, label: rec.label, sourceBytes: srcBytes });
 
         const file = `${vol.name}-${stamp}.tar.gz`;
         const script =
@@ -373,6 +385,7 @@ export async function runBackup({ jobId = 'default', trigger = 'manual' } = {}) 
       } finally {
         if (tmpVol) await docker.getVolume(tmpVol).remove().catch(() => {});
       }
+      emit({ type: 'volume', phase: 'done', index, total: planned.length, name: vol.name, label: rec.label, ok: rec.ok, bytes: rec.bytes, error: rec.error });
       entry.volumes.push(rec);
     }
     const failed = entry.volumes.filter((v) => !v.ok).length;

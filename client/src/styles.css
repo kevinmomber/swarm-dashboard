@@ -209,6 +209,7 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 .toast.err { background: #3a1513; color: #ffb4b0; border: 1px solid rgba(248,81,73,.4); }
 .empty { text-align: center; color: var(--text-dim); padding: 48px 20px; }
 .spinner { text-align: center; color: var(--text-dim); padding: 40px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .banner {
   background: rgba(210,153,34,.1); border: 1px solid rgba(210,153,34,.4);
   color: var(--amber); padding: 12px 16px; border-radius: 8px; margin-bottom: 18px;

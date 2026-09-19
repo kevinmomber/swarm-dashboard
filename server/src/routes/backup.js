@@ -50,6 +50,26 @@ router.post('/run', async (req, res, next) => {
   }
 });
 
+// Trigger a backup now and stream live progress (SSE) per volume.
+router.post('/run-stream', async (req, res) => {
+  const jobId = req.body?.jobId || 'default';
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (res.flushHeaders) res.flushHeaders();
+  const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+  try {
+    const entry = await runBackup({
+      jobId, trigger: 'manual',
+      onProgress: (ev) => send(ev),
+    });
+    send({ type: 'done', entry });
+  } catch (e) {
+    send({ type: 'error', message: e.message });
+  }
+  res.end();
+});
+
 router.post('/test-target', async (req, res, next) => {
   try {
     const target = req.body && req.body.type ? req.body : undefined;

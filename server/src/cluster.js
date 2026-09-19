@@ -811,6 +811,68 @@ export async function migrateService({ id, source, target, newName, nodeId, stop
   return { ok: true, volume: newName, kind: 'service', service: spec.Name, replicas, restored: didStop, pinnedNode: nodeId };
 }
 
+/**
+ * vMotion-style migration: move a service (incl. its named-volume data) to
+ * another node. Copies each named volume's contents from the source node to the
+ * target node (same volume name), then pins the service to the target via a
+ * node.hostname constraint so it reschedules onto the pre-populated volumes.
+ * Source volumes are left intact (safe rollback); bind mounts are reported but
+ * not copied (host paths differ per node).
+ */
+export async function migrateServiceToNode({ serviceId, targetHostname, onPhase, onVolume, onSize, onBytes }) {
+  await requireManager();
+  if (!serviceId || !targetHostname) throw new Error('serviceId und targetHostname erforderlich');
+
+  const nodes = await docker.listNodes();
+  const target = nodes.find((n) => n.Description?.Hostname === targetHostname);
+  if (!target) throw new Error(`Ziel-Node „${targetHostname}" nicht gefunden`);
+  if (target.Status?.State !== 'ready') throw new Error(`Ziel-Node „${targetHostname}" ist nicht bereit`);
+  const targetNodeId = target.ID;
+
+  const svc = docker.getService(serviceId);
+  const info = await svc.inspect();
+  const spec = structuredClone(info.Spec);
+  const name = spec.Name;
+  if (spec.Mode?.Global) throw new Error('Globale Services laufen bereits auf allen Nodes und können nicht migriert werden');
+
+  // Current node = where a running task sits.
+  const tasks = await docker.listTasks({ filters: { service: [name] } });
+  const runningTask = tasks.find((t) => t.Status?.State === 'running') || tasks.find((t) => t.DesiredState === 'running');
+  const sourceNodeId = runningTask?.NodeID || null;
+  const sourceHostname = sourceNodeId ? nodes.find((n) => n.ID === sourceNodeId)?.Description?.Hostname : null;
+  if (sourceNodeId && sourceNodeId === targetNodeId) throw new Error(`Service läuft bereits auf „${targetHostname}"`);
+
+  const mounts = spec.TaskTemplate?.ContainerSpec?.Mounts || [];
+  const namedVols = mounts.filter((m) => m.Type === 'volume' && m.Source).map((m) => m.Source);
+  const binds = mounts.filter((m) => m.Type === 'bind').map((m) => m.Source);
+
+  // Phase 1: copy each named volume's data source node -> target node (same name).
+  onPhase?.('volumes');
+  for (const vol of namedVols) {
+    onVolume?.(vol);
+    await volumeDuplicate({ srcNodeId: sourceNodeId, name: vol, dstNodeId: targetNodeId, newName: vol, onSize, onBytes });
+  }
+
+  // Phase 2: pin the service to the target node (keep other constraints).
+  onPhase?.('reschedule');
+  const fresh = await svc.inspect();
+  const fspec = structuredClone(fresh.Spec);
+  fspec.TaskTemplate = fspec.TaskTemplate || {};
+  const existing = fspec.TaskTemplate.Placement?.Constraints || [];
+  const kept = existing.filter((c) => !/^\s*node\.(id|hostname)\s*==/i.test(c));
+  kept.push(`node.hostname==${targetHostname}`);
+  fspec.TaskTemplate.Placement = { ...(fspec.TaskTemplate.Placement || {}), Constraints: kept };
+  fspec.TaskTemplate.ForceUpdate = (fspec.TaskTemplate.ForceUpdate || 0) + 1;
+  await svc.update({ version: fresh.Version.Index, ...fspec });
+
+  onPhase?.('done');
+  return {
+    ok: true, service: name,
+    from: sourceHostname, to: targetHostname,
+    volumesCopied: namedVols, bindMountsSkipped: binds,
+  };
+}
+
 /* --------------------------- security ------------------------------ */
 
 /** Scannable targets = unique images per node, annotated with using services/containers. */

@@ -7,6 +7,7 @@ import Console from '../components/Console.jsx';
 import TagModal from '../components/TagModal.jsx';
 import PlacementModal from '../components/PlacementModal.jsx';
 import ServiceEditModal from '../components/ServiceEditModal.jsx';
+import MigrateModal from '../components/MigrateModal.jsx';
 import Dropdown from '../components/Dropdown.jsx';
 
 function ReplicaCell({ s }) {
@@ -74,6 +75,7 @@ export default function Services() {
   const [consoleSvc, setConsoleSvc] = useState(null);
   const [tagSvc, setTagSvc] = useState(null);
   const [editSvc, setEditSvc] = useState(null);
+  const [migrateSvc, setMigrateSvc] = useState(null);
   const [replicas, setReplicas] = useState(1);
   const [image, setImage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -176,6 +178,7 @@ export default function Services() {
                   { label: 'Platzierung', onClick: () => setPlaceSvc(s) },
                   { label: 'Skalieren', onClick: () => openScale(s), hidden: s.mode !== 'replicated' },
                   { label: 'Bearbeiten & Redeploy', onClick: () => setEditSvc(s) },
+            { label: 'Migration (vMotion)', onClick: () => setMigrateSvc(s), hidden: s.mode === 'global' },
                   { label: upd?.updateAvailable ? 'Update (verfügbar)' : 'Update', onClick: () => openUpdate(s) },
                   { label: 'Rollback', onClick: () => rollback(s), hidden: !s.hasPrevious },
                   { label: 'Export', onClick: () => exportSvc(s) },
@@ -254,6 +257,7 @@ export default function Services() {
       {consoleSvc && <Console service={consoleSvc} onClose={() => setConsoleSvc(null)} />}
       {tagSvc && <TagModal service={tagSvc} onClose={() => setTagSvc(null)} onApplied={reload} />}
       {editSvc && <ServiceEditModal service={editSvc} onClose={() => setEditSvc(null)} onDone={reload} />}
+      {migrateSvc && <MigrateModal service={migrateSvc} onClose={() => setMigrateSvc(null)} onDone={reload} />}
       {placeSvc && <PlacementModal service={placeSvc} onClose={() => setPlaceSvc(null)} />}
     </>
   );

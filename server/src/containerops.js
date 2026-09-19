@@ -5,7 +5,7 @@
  */
 import { docker } from './docker.js';
 import { Writable } from 'node:stream';
-import { ensureImage, HELPER_IMAGE } from './ephemeral.js';
+import { ensureImage } from './ephemeral.js';
 
 /* --------------------------- exec helper --------------------------- */
 
@@ -182,10 +182,11 @@ const SWARM_SVC_LABEL = 'com.docker.swarm.service.id';
  * so listing/reading/writing inside a volume works like a container browse.
  */
 async function withVolumeHelper(volume, fn) {
-  await ensureImage();
+  const image = await ensureImage();
   const c = await docker.createContainer({
-    Image: HELPER_IMAGE,
+    Image: image,
     Cmd: ['sleep', '120'],
+    Entrypoint: [''], // neutralize the dashboard image's ENTRYPOINT (node)
     HostConfig: { Binds: [`${volume}:/vol`], AutoRemove: false },
     Tty: false,
   });

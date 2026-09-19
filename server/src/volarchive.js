@@ -7,15 +7,16 @@
  * socket) and by the node agent (local socket) — each operating on its own engine.
  */
 import { docker } from './docker.js';
-import { ensureImage, HELPER_IMAGE, runEphemeral } from './ephemeral.js';
+import { ensureImage, resolveHelperImage, runEphemeral } from './ephemeral.js';
 
 const MOUNT = '/vol';
 
 async function helperFor(volumeName, ro) {
-  await ensureImage();
+  const image = await ensureImage();
   return docker.createContainer({
-    Image: HELPER_IMAGE,
+    Image: image,
     Cmd: ['true'],
+    Entrypoint: [''], // neutralize the dashboard image's ENTRYPOINT (node)
     HostConfig: { Binds: [`${volumeName}:${MOUNT}${ro ? ':ro' : ''}`] },
   });
 }

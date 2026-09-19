@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
 import { exportService, updateServiceLabels, resolveRunningContainer } from '../serviceops.js';
+import { migrateServiceToNode } from '../cluster.js';
 import { PROXY_LABEL, GROUP_LABEL, BACKUP_LABEL } from '../settings.js';
 import { authConfigFor } from '../registryauth.js';
 
@@ -204,6 +205,32 @@ router.post('/:id/rollback', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// vMotion-style migration: move a service (incl. named-volume data) to another node.
+router.post('/:id/migrate', async (req, res, next) => {
+  const { targetNode } = req.body || {};
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (res.flushHeaders) res.flushHeaders();
+  const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+  try {
+    await requireManager();
+    if (!targetNode) throw new Error('targetNode erforderlich');
+    const result = await migrateServiceToNode({
+      serviceId: req.params.id,
+      targetHostname: targetNode,
+      onPhase: (phase) => send({ type: 'phase', phase }),
+      onVolume: (volume) => send({ type: 'volume', volume }),
+      onSize: (total) => send({ type: 'size', total }),
+      onBytes: (bytes) => send({ type: 'progress', bytes }),
+    });
+    send({ type: 'done', result });
+  } catch (e) {
+    send({ type: 'error', message: e.message });
+  }
+  res.end();
 });
 
 // Full editable config of a service (prefill for the edit form).

@@ -231,6 +231,18 @@ router.get('/:id/config', async (req, res, next) => {
     const resNano = spec.TaskTemplate?.Resources || {};
     const toCpus = (nano) => (nano ? Math.round((nano / 1e9) * 100) / 100 : '');
     const toMb = (bytes) => (bytes ? Math.round(bytes / (1024 * 1024)) : '');
+    // Placement: current node constraint (node.hostname==X) + selectable nodes.
+    const constraints = spec.TaskTemplate?.Placement?.Constraints || [];
+    const nodeConstraint = constraints.find((c) => /^node\.hostname\s*==/.test(c));
+    const placementNode = nodeConstraint ? nodeConstraint.split('==')[1].trim() : '';
+    const otherConstraints = constraints.filter((c) => !/^node\.hostname\s*==/.test(c));
+    const swarmNodes = await docker.listNodes();
+    const availableNodes = swarmNodes.map((n) => ({
+      hostname: n.Description?.Hostname,
+      role: n.Spec?.Role,
+      availability: n.Spec?.Availability,
+      state: n.Status?.State,
+    })).filter((n) => n.hostname);
     res.json({
       id: info.ID,
       name: spec.Name,
@@ -248,6 +260,9 @@ router.get('/:id/config', async (req, res, next) => {
       memLimit: toMb(resNano.Limits?.MemoryBytes),
       cpuReservation: toCpus(resNano.Reservations?.NanoCPUs),
       memReservation: toMb(resNano.Reservations?.MemoryBytes),
+      placementNode,
+      otherConstraints,
+      availableNodes,
     });
   } catch (err) {
     next(err);
@@ -309,6 +324,14 @@ router.post('/:id/edit', async (req, res, next) => {
       if (patch.cpuReservation !== undefined) { const v = nano(patch.cpuReservation); if (v) reservations.NanoCPUs = v; else delete reservations.NanoCPUs; }
       if (patch.memReservation !== undefined) { const v = bytes(patch.memReservation); if (v) reservations.MemoryBytes = v; else delete reservations.MemoryBytes; }
       spec.TaskTemplate.Resources = { Limits: limits, Reservations: reservations };
+    }
+    // Placement: pin (or unpin) the service to a specific node via node.hostname.
+    if (patch.placementNode !== undefined) {
+      const existing = spec.TaskTemplate.Placement?.Constraints || [];
+      const kept = existing.filter((c) => !/^node\.hostname\s*==/.test(c));
+      const node = String(patch.placementNode || '').trim();
+      if (node) kept.push(`node.hostname==${node}`);
+      spec.TaskTemplate.Placement = { ...(spec.TaskTemplate.Placement || {}), Constraints: kept };
     }
     spec.TaskTemplate.ForceUpdate = (spec.TaskTemplate.ForceUpdate || 0) + 1;
     await svc.update({ version: info.Version.Index, ...spec });

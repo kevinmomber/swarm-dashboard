@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
-import { listVolumes, volumeUsage, volumeRemove, volumeCreate, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
+import { listVolumes, volumeUsage, volumeRemove, volumeCreate, volumeRename, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
 
 const router = Router();
 
@@ -159,6 +159,24 @@ router.post('/volumes/duplicate', async (req, res, next) => {
   try {
     const result = await volumeDuplicate({
       srcNodeId, name, dstNodeId, newName,
+      onSize: (total) => send({ type: 'size', total }),
+      onBytes: (bytes) => send({ type: 'progress', bytes }),
+    });
+    send({ type: 'done', result });
+  } catch (e) {
+    send({ type: 'error', message: e.message });
+  }
+  res.end();
+});
+router.post('/volumes/rename', async (req, res, next) => {
+  const { nodeId, name, newName } = req.body || {};
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (res.flushHeaders) res.flushHeaders();
+  const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+  try {
+    const result = await volumeRename(nodeId, name, newName, {
       onSize: (total) => send({ type: 'size', total }),
       onBytes: (bytes) => send({ type: 'progress', bytes }),
     });

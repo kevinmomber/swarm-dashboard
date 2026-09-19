@@ -443,6 +443,27 @@ export async function volumeCreate(nodeId, { name, driver, labels, driverOpts } 
   return { ok: true, name };
 }
 
+/**
+ * "Rename" a volume: Docker has no native rename, so copy the contents into a
+ * new volume of the target name (same node) and remove the original. Refuses
+ * when the source is still in use by a service/container.
+ */
+export async function volumeRename(nodeId, name, newName, { onSize, onBytes } = {}) {
+  await requireManager();
+  if (!name || !newName) throw new Error('name und newName erforderlich');
+  if (name === newName) throw new Error('Neuer Name ist identisch mit dem alten');
+  if (!/^[\w][\w.-]*$/.test(newName)) throw new Error('Ungültiger Ziel-Volumename');
+  // Guard: cannot rename a volume that is currently in use.
+  const usage = await volumeUsage(nodeId, name);
+  if (usage.services.length > 0 || usage.containers.length > 0) {
+    throw new Error('Volume wird verwendet — zuerst alle Services/Container trennen');
+  }
+  // Duplicate onto the same node under the new name, then drop the original.
+  await volumeDuplicate({ srcNodeId: nodeId, name, dstNodeId: nodeId, newName, onSize, onBytes });
+  await volumeRemove(nodeId, name, false);
+  return { ok: true, name: newName };
+}
+
 /** Best-effort apparent size of a volume (bytes) — local or via node agent. */
 async function volumeSizeOf(nodeId, name, localId) {
   const local = !nodeId || nodeId === localId;

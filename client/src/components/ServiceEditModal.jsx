@@ -33,6 +33,8 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
   const [memLimit, setMemLimit] = useState('');
   const [cpuRes, setCpuRes] = useState('');
   const [memRes, setMemRes] = useState('');
+  const [placementNode, setPlacementNode] = useState('');
+  const [availableNodes, setAvailableNodes] = useState([]);
   const [tab, setTab] = useState('general');
   const [runtime, setRuntime] = useState(null); // { containerId, nodeId, image }
 
@@ -62,6 +64,8 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
         setMemLimit(c.memLimit === '' || c.memLimit == null ? '' : String(c.memLimit));
         setCpuRes(c.cpuReservation === '' || c.cpuReservation == null ? '' : String(c.cpuReservation));
         setMemRes(c.memReservation === '' || c.memReservation == null ? '' : String(c.memReservation));
+        setPlacementNode(c.placementNode || '');
+        setAvailableNodes(c.availableNodes || []);
       })
       .catch((e) => alive && setErr(e.message));
     return () => { alive = false; };
@@ -91,6 +95,7 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
       memLimit: memLimit.trim(),
       cpuReservation: cpuRes.trim(),
       memReservation: memRes.trim(),
+      placementNode: placementNode.trim(),
     };
     if (cfg?.mode === 'replicated' && replicas !== '') patch.replicas = replicas;
     const argsTrim = argsText.trim();
@@ -152,6 +157,18 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
             <select value={restartCondition} onChange={(e) => setRestartCondition(e.target.value)}>
               {RESTART.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
+          </div>
+          <div className="field">
+            <label>Node-Vorgabe (Platzierung)</label>
+            <select value={placementNode} onChange={(e) => setPlacementNode(e.target.value)}>
+              <option value="">— beliebiger Node (keine Vorgabe) —</option>
+              {availableNodes.map((n) => (
+                <option key={n.hostname} value={n.hostname}>
+                  {n.hostname}{n.role === 'manager' ? ' (Manager)' : ''}{n.availability && n.availability !== 'active' ? ` · ${n.availability}` : ''}
+                </option>
+              ))}
+            </select>
+            <div className="help" style={{ marginTop: 4 }}>Bindet den Service an einen bestimmten Node (Constraint <span className="mono">node.hostname==…</span>). „Beliebiger Node" entfernt die Vorgabe. Andere vorhandene Constraints bleiben erhalten.</div>
           </div>
           <div className="field">
             <label>Ports (veröffentlicht → Ziel)</label>

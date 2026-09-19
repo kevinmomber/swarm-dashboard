@@ -95,6 +95,8 @@ function VolumeDetail({ vol, onClose, onChanged }) {
   const impRef = useRef(null);
   const [impBusy, setImpBusy] = useState(false);
   const [impChk, setImpChk] = useState(false);
+  const [renName, setRenName] = useState(`${vol.name}-neu`);
+  const [renProg, setRenProg] = useState(null); // { total, bytes, done }
 
   useEffect(() => {
     api.get(`/volumes/usage?nodeId=${encodeURIComponent(vol.nodeId || '')}&name=${encodeURIComponent(vol.name)}`)
@@ -127,6 +129,26 @@ function VolumeDetail({ vol, onClose, onChanged }) {
       toast(`Volume nach „${dupName}" auf ${dst?.hostname || 'Node'} dupliziert`);
       onChanged(); onClose();
     } catch (e) { toast(e.message, 'err'); setDupProg(null); } finally { setBusy(false); }
+  };
+
+  const rename = async () => {
+    if (!renName || renName === vol.name) return;
+    setBusy(true);
+    setRenProg({ total: null, bytes: 0, done: false });
+    let errMsg = null;
+    try {
+      await postSSE('/volumes/rename',
+        { nodeId: vol.nodeId, name: vol.name, newName: renName },
+        (evt) => {
+          if (evt.type === 'size') setRenProg((p) => ({ ...(p || { bytes: 0 }), total: evt.total || null }));
+          else if (evt.type === 'progress') setRenProg((p) => ({ ...(p || { total: null }), bytes: evt.bytes }));
+          else if (evt.type === 'done') setRenProg((p) => ({ ...(p || { bytes: 0, total: null }), done: true }));
+          else if (evt.type === 'error') errMsg = evt.message;
+        });
+      if (errMsg) throw new Error(errMsg);
+      toast(`Volume „${vol.name}" → „${renName}" umbenannt`);
+      onChanged(); onClose();
+    } catch (e) { toast(e.message, 'err'); setRenProg(null); } finally { setBusy(false); }
   };
 
   const exportVol = () => {
@@ -195,6 +217,33 @@ function VolumeDetail({ vol, onClose, onChanged }) {
               {usage.containers.map((c) => <Badge key={c.id} kind={c.state === 'running' ? 'ok' : 'muted'}>{c.name}{c.swarm && c.service ? ` · ${c.service}` : ''}</Badge>)}
             </div>
           )}
+
+          {hr}
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Umbenennen</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+            <input value={renName} onChange={(e) => setRenName(e.target.value)} placeholder="Neuer Volumename" style={{ width: 220 }} />
+            <button className="btn primary" disabled={busy || !removable || !renName || renName === vol.name} onClick={rename}>Umbenennen</button>
+          </div>
+          <div className="help" style={{ marginBottom: 4 }}>
+            {removable
+              ? 'Docker kann Volumes nicht direkt umbenennen: der Inhalt wird in ein neues Volume mit dem gewünschten Namen kopiert und das alte danach entfernt.'
+              : 'Umbenennen nicht möglich: Volume wird verwendet. Zuerst alle Services/Container trennen.'}
+          </div>
+          {renProg && (() => {
+            const pct = renProg.done ? 100 : (renProg.total
+              ? Math.min(99, Math.round((renProg.bytes / renProg.total) * 100))
+              : Math.min(95, Math.round((1 - 1 / (1 + renProg.bytes / (10 * 1024 * 1024))) * 100)));
+            return (
+              <div style={{ margin: '8px 0 4px' }}>
+                <div className="help" style={{ marginBottom: 4 }}>
+                  {renProg.done ? 'Fertig · ' : 'Kopiere… '}{bytes(renProg.bytes || 0)}{renProg.total ? ` / ~${bytes(renProg.total)}` : ''} ({pct}%)
+                </div>
+                <div style={{ height: 8, borderRadius: 4, background: 'var(--bg-elev2)', overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', transition: 'width .25s' }} />
+                </div>
+              </div>
+            );
+          })()}
 
           {hr}
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Auf anderen Node duplizieren</div>

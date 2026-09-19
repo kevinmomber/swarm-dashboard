@@ -162,6 +162,15 @@ export async function listArchives() {
       (byVol[vol] = byVol[vol] || []).push({ file, bytes: parseInt(size, 10) || 0 });
     }
     for (const v of Object.keys(byVol)) byVol[v].sort((a, b) => b.file.localeCompare(a.file));
+
+    // Resolve which node each volume currently belongs to (for display + default
+    // restore target) and map node ids to hostnames.
+    const services = await listBackupServices().catch(() => []);
+    const nodeByVol = new Map();
+    for (const svc of services) for (const v of svc.volumes) if (!nodeByVol.has(v.name)) nodeByVol.set(v.name, v.nodeId || null);
+    const hostById = new Map();
+    try { for (const n of await docker.listNodes()) hostById.set(n.ID, n.Description?.Hostname || null); } catch { /* ignore */ }
+
     // Decorate with a friendly label + type (bind sources are base64url-encoded).
     const out = {};
     for (const [key, list] of Object.entries(byVol)) {
@@ -170,7 +179,8 @@ export async function listArchives() {
         type = 'bind';
         try { label = Buffer.from(key.slice(5), 'base64url').toString('utf8'); } catch { label = key; }
       }
-      out[key] = { type, label, archives: list };
+      const nId = nodeByVol.get(key) || null;
+      out[key] = { type, label, nodeId: nId, hostname: nId ? (hostById.get(nId) || null) : null, archives: list };
     }
     return out;
   } finally {
@@ -178,8 +188,23 @@ export async function listArchives() {
   }
 }
 
-/** Restore a single archive back into its named volume or bind path. */
-export async function restoreArchive({ volume, file, clean }) {
+/** Resolve the node a backed-up volume currently belongs to (via tagged services). */
+async function resolveVolumeNode(volumeName) {
+  try {
+    const services = await listBackupServices();
+    for (const svc of services) {
+      for (const v of svc.volumes) {
+        if (v.name === volumeName) return v.nodeId || null;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** Restore a single archive back into its named volume or bind path.
+ * Node-aware: a named volume is restored onto the node it currently belongs to
+ * (auto-resolved from the tagged services, or an explicit nodeId override). */
+export async function restoreArchive({ volume, file, clean, nodeId }) {
   await requireManager();
   if (!volume || !file) throw new Error('volume und file erforderlich');
   if (!/^[\w.-]+$/.test(volume) || !/^[\w.-]+\.tar\.gz$/.test(file)) {
@@ -189,9 +214,38 @@ export async function restoreArchive({ volume, file, clean }) {
   const storedPw = settings.backup.target?.smb?.password || '';
   await ensureImage();
 
-  // Determine the restore destination mount.
+  const localId = await localNodeId();
+  const isBind = volume.startsWith('bind-');
+  // Target node: explicit override wins, else auto-resolve from tagged services.
+  const targetNode = nodeId || (isBind ? null : await resolveVolumeNode(volume));
+  const remote = targetNode && localId && targetNode !== localId;
+
+  // --- Remote named volume: extract on the manager into a temp volume, then
+  //     push it onto the target node (with optional clean wipe). ---
+  if (remote) {
+    if (isBind) throw new Error('Bind-Mount-Restore auf einen Remote-Node wird nicht unterstützt (nur Named Volumes)');
+    const tmp = `swarmdash_rsttmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const { bind, sub, cleanup } = await prepareTarget(settings.backup.target, { withPassword: storedPw });
+    try {
+      await docker.createVolume({ Name: tmp }).catch(() => {});
+      const script =
+        `set -e; SRC="/target${sub}/${file}"; [ -f "$SRC" ] || { echo "Archiv nicht gefunden"; exit 2; }; ` +
+        `find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null; ` +
+        `tar xzf "$SRC" -C /data ; echo extracted`;
+      const { code, output } = await runEphemeral([`${tmp}:/data`, bind], script);
+      if (code !== 0) throw new Error(output || `Exit ${code}`);
+      // Push temp volume's contents to the real volume on the target node.
+      await volumeDuplicate({ srcNodeId: localId, name: tmp, dstNodeId: targetNode, newName: volume, clean: Boolean(clean) });
+      return { ok: true, volume, file, node: targetNode };
+    } finally {
+      await cleanup();
+      await docker.getVolume(tmp).remove().catch(() => {});
+    }
+  }
+
+  // --- Local (manager) volume or bind: extract directly on the manager. ---
   let destMount;
-  if (volume.startsWith('bind-')) {
+  if (isBind) {
     let path;
     try { path = Buffer.from(volume.slice(5), 'base64url').toString('utf8'); } catch { throw new Error('Ungültiger Bind-Bezeichner'); }
     if (!path.startsWith('/')) throw new Error('Bind-Pfad ungültig');
@@ -209,7 +263,7 @@ export async function restoreArchive({ volume, file, clean }) {
       `${wipe} tar xzf "$SRC" -C /data ; echo restored`;
     const { code, output } = await runEphemeral([destMount, bind], script);
     if (code !== 0) throw new Error(output || `Exit ${code}`);
-    return { ok: true, volume, file };
+    return { ok: true, volume, file, node: targetNode || localId };
   } finally {
     await cleanup();
   }

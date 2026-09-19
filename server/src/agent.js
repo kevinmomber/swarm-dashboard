@@ -293,7 +293,8 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/volume-import' && req.method === 'POST') {
       const name = u.searchParams.get('name');
       if (!name) { res.statusCode = 400; return json({ error: 'name fehlt' }); }
-      await importVolume(name, req);
+      const clean = u.searchParams.get('clean') === '1';
+      await importVolume(name, req, { clean });
       return json({ ok: true });
     }
 

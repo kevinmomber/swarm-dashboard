@@ -38,9 +38,18 @@ export async function exportVolume(volumeName) {
   return stream;
 }
 
-/** Extract a tar stream (entries prefixed "vol/") into volumeName (created if needed). */
-export async function importVolume(volumeName, tarStream) {
+/** Extract a tar stream (entries prefixed "vol/") into volumeName (created if needed).
+ * With { clean: true } the volume's existing contents are wiped first. */
+export async function importVolume(volumeName, tarStream, { clean = false } = {}) {
   await docker.createVolume({ Name: volumeName }).catch(() => {});
+  if (clean) {
+    // Empty the volume's current contents before restoring (node-local wipe).
+    await ensureImage();
+    await runEphemeral(
+      [`${volumeName}:${MOUNT}`],
+      `find ${MOUNT} -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null; true`,
+    ).catch(() => {});
+  }
   const c = await helperFor(volumeName, false);
   try {
     // The tar's top-level dir is "vol/", so extracting at "/" lands the content

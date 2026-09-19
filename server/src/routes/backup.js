@@ -71,8 +71,8 @@ router.get('/archives', async (req, res, next) => {
 // Restore an archive into its volume.
 router.post('/restore', async (req, res, next) => {
   try {
-    const { volume, file, clean } = req.body || {};
-    res.json(await restoreArchive({ volume, file, clean: Boolean(clean) }));
+    const { volume, file, clean, nodeId } = req.body || {};
+    res.json(await restoreArchive({ volume, file, clean: Boolean(clean), nodeId: nodeId || null }));
   } catch (err) {
     next(err);
   }

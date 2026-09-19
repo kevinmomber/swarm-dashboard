@@ -497,7 +497,7 @@ export async function localNodeId() {
  * Optional callbacks report progress: onSize(totalBytes|null) once, then
  * onBytes(copiedBytes) as the tar stream flows through the manager.
  */
-export async function volumeDuplicate({ srcNodeId, name, dstNodeId, newName, onSize, onBytes }) {
+export async function volumeDuplicate({ srcNodeId, name, dstNodeId, newName, clean = false, onSize, onBytes }) {
   await requireManager();
   if (!name || !newName) throw new Error('name und newName erforderlich');
   if (!/^[\w][\w.-]*$/.test(newName)) throw new Error('Ungültiger Ziel-Volumename');
@@ -545,9 +545,9 @@ export async function volumeDuplicate({ srcNodeId, name, dstNodeId, newName, onS
 
   // Write into the destination volume.
   if (dstLocal) {
-    await importVolume(newName, stream);
+    await importVolume(newName, stream, { clean });
   } else {
-    const r = await fetch(`${dstBase}/volume-import?name=${encodeURIComponent(newName)}`, {
+    const r = await fetch(`${dstBase}/volume-import?name=${encodeURIComponent(newName)}${clean ? '&clean=1' : ''}`, {
       method: 'POST', headers: { 'Content-Type': 'application/x-tar' }, body: stream, duplex: 'half',
     });
     if (!r.ok) {

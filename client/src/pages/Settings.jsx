@@ -538,6 +538,7 @@ export default function Settings() {
               {hist.history.map((h) => {
                 const okv = h.volumes.filter((v) => v.ok);
                 const total = okv.reduce((a, v) => a + (v.bytes || 0), 0);
+                const failedV = h.volumes.filter((v) => !v.ok);
                 return (
                   <tr key={h.id}>
                     <td>{ago(h.startedAt)}</td>
@@ -545,7 +546,17 @@ export default function Settings() {
                     <td>{h.trigger === 'schedule' ? 'Zeitplan' : 'Manuell'}</td>
                     <td><Badge kind={statusKind(h.status)}>{h.status}</Badge>
                       {h.error && <div style={{ color: 'var(--red)', fontSize: 11 }}>{h.error}</div>}</td>
-                    <td>{okv.length}/{h.volumes.length}</td>
+                    <td>{okv.length}/{h.volumes.length}
+                      {failedV.length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          {failedV.map((v) => (
+                            <div key={v.name} style={{ color: 'var(--red)', fontSize: 11 }}>
+                              <span className="mono">{v.label || v.name}</span>: {v.error || 'Fehler'}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td className="mono">{bytes(total)}</td>
                   </tr>
                 );

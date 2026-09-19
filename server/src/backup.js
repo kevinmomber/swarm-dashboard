@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { docker, requireManager } from './docker.js';
 import { ensureImage, runEphemeral } from './ephemeral.js';
+import { volumeDuplicate, volumeSizeOnNode, localNodeId } from './cluster.js';
 import {
   loadSettings,
   saveSettings,
@@ -15,11 +16,31 @@ import {
 
 /**
  * Services opted-in via label swarmdash.backup=<tag>, with their named volumes.
+ * Each volume is annotated with the nodeId where the service's task runs — the
+ * data physically lives on that node, so the backup must read it there (not on
+ * the manager, which would otherwise mount an empty auto-created volume).
  * @param {string} [tag] restrict to services whose backup label equals this value.
  */
 export async function listBackupServices(tag) {
   await requireManager();
-  const services = await docker.listServices();
+  const [services, tasks] = await Promise.all([
+    docker.listServices(),
+    docker.listTasks().catch(() => []),
+  ]);
+
+  // service id -> nodeId (prefer a running task, else any task with a node).
+  const nodeByService = new Map();
+  for (const t of tasks) {
+    if (t.ServiceID && t.NodeID && t.Status?.State === 'running' && !nodeByService.has(t.ServiceID)) {
+      nodeByService.set(t.ServiceID, t.NodeID);
+    }
+  }
+  for (const t of tasks) {
+    if (t.ServiceID && t.NodeID && !nodeByService.has(t.ServiceID)) {
+      nodeByService.set(t.ServiceID, t.NodeID);
+    }
+  }
+
   const result = [];
   for (const s of services) {
     const labels = s.Spec?.Labels || {};
@@ -27,15 +48,16 @@ export async function listBackupServices(tag) {
     if (!val || val === 'false' || val === '0') continue;
     if (tag != null && val !== tag) continue;
 
+    const nodeId = nodeByService.get(s.ID) || null;
     const mounts = s.Spec?.TaskTemplate?.ContainerSpec?.Mounts || [];
     let volumes = mounts
       .filter((m) => (m.Type === 'volume' || m.Type === 'bind') && m.Source)
       .map((m) => {
         if (m.Type === 'bind') {
           const id = `bind-${Buffer.from(m.Source).toString('base64url')}`;
-          return { name: id, source: m.Source, target: m.Target, type: 'bind', label: m.Source };
+          return { name: id, source: m.Source, target: m.Target, type: 'bind', label: m.Source, nodeId };
         }
-        return { name: m.Source, source: m.Source, target: m.Target, type: 'volume', label: m.Source };
+        return { name: m.Source, source: m.Source, target: m.Target, type: 'volume', label: m.Source, nodeId };
       });
 
     const only = labels[BACKUP_VOLUMES_LABEL];
@@ -50,6 +72,7 @@ export async function listBackupServices(tag) {
       name: s.Spec.Name,
       stack: labels['com.docker.stack.namespace'] || null,
       tag: val,
+      nodeId,
       volumes,
     });
   }
@@ -224,8 +247,9 @@ export async function runBackup({ jobId = 'default', trigger = 'manual' } = {}) 
   let cleanup = async () => {};
   try {
     await ensureImage();
+    const localId = await localNodeId();
     const services = await listBackupServices(job.tag);
-    const volMap = new Map(); // name -> { name, source, type, label }
+    const volMap = new Map(); // name -> { name, source, type, label, nodeId }
     for (const svc of services) {
       for (const v of svc.volumes) {
         if (!volMap.has(v.name)) volMap.set(v.name, v);
@@ -242,22 +266,58 @@ export async function runBackup({ jobId = 'default', trigger = 'manual' } = {}) 
     const stamp = ts();
 
     for (const vol of volMap.values()) {
-      const rec = { name: vol.name, label: vol.label || vol.name, type: vol.type || 'volume', file: null, bytes: 0, ok: false, error: null };
+      const remote = vol.nodeId && localId && vol.nodeId !== localId;
+      const rec = {
+        name: vol.name, label: vol.label || vol.name, type: vol.type || 'volume',
+        nodeId: vol.nodeId || localId, file: null, bytes: 0, sourceBytes: null, ok: false, error: null,
+      };
+      let tmpVol = null;
       try {
+        // The archive helper runs on the MANAGER and mounts the source by name.
+        // For a volume that physically lives on another node, the manager has no
+        // such volume — Docker would auto-create an EMPTY one → a byte-sized
+        // archive wrongly reported as success. So for remote volumes we first
+        // copy the data to a temp volume on the manager (verified cross-node
+        // path), then archive that. Bind mounts can't be copied this way.
+        let mountSource = vol.source;
+        if (remote) {
+          if (vol.type === 'bind') {
+            throw new Error(`Bind-Mount „${vol.label}" liegt auf Remote-Node und wird für Backups derzeit nicht unterstützt (nur Named Volumes)`);
+          }
+          tmpVol = `swarmdash_bktmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+          await volumeDuplicate({ srcNodeId: vol.nodeId, name: vol.source, dstNodeId: localId, newName: tmpVol });
+          mountSource = tmpVol;
+        }
+
+        // Node-aware apparent source size — used both as info and as a guard.
+        const srcBytes = await volumeSizeOnNode(vol.nodeId, vol.source).catch(() => null);
+        rec.sourceBytes = srcBytes;
+
         const file = `${vol.name}-${stamp}.tar.gz`;
         const script =
           `set -e; DIR="/target${prepared.sub}"; mkdir -p "$DIR"; ` +
           `tar czf "$DIR/${file}" -C /data . ; ` +
           `ls -1t "$DIR/${vol.name}-"*.tar.gz 2>/dev/null | tail -n +${keep + 1} | xargs -r rm -f ; ` +
           `stat -c %s "$DIR/${file}"`;
-        const { code, output } = await runEphemeral([`${vol.source}:/data:ro`, prepared.bind], script);
+        const { code, output } = await runEphemeral([`${mountSource}:/data:ro`, prepared.bind], script);
         if (code !== 0) throw new Error(output || `Exit ${code}`);
         const bytes = parseInt(output.split('\n').pop().trim(), 10);
+        const finalBytes = Number.isFinite(bytes) ? bytes : 0;
+
+        // Guard: source clearly has content (>1 MB) but archive is empty-tar sized
+        // (~86 B). This catches any residual "empty volume" situation instead of
+        // silently recording a useless backup as success.
+        if (srcBytes != null && srcBytes > 1048576 && finalBytes < 512) {
+          throw new Error(`Archiv verdächtig leer (${finalBytes} B) obwohl die Quelle ~${Math.round(srcBytes / 1048576)} MB enthält — Backup als fehlgeschlagen markiert`);
+        }
+
         rec.file = file;
-        rec.bytes = Number.isFinite(bytes) ? bytes : 0;
+        rec.bytes = finalBytes;
         rec.ok = true;
       } catch (e) {
         rec.error = e.message;
+      } finally {
+        if (tmpVol) await docker.getVolume(tmpVol).remove().catch(() => {});
       }
       entry.volumes.push(rec);
     }

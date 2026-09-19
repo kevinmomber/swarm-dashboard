@@ -477,6 +477,21 @@ async function volumeSizeOf(nodeId, name, localId) {
   return null;
 }
 
+/** Public, node-aware apparent size (bytes) of a volume — resolves the manager
+ * node id itself. Used e.g. by the backup guard to detect empty archives. */
+export async function volumeSizeOnNode(nodeId, name) {
+  await requireManager();
+  const info = await docker.info();
+  const localId = info.Swarm?.NodeID || null;
+  return volumeSizeOf(nodeId, name, localId);
+}
+
+/** The manager's own swarm node id (or null when not in a swarm). */
+export async function localNodeId() {
+  const info = await docker.info();
+  return info.Swarm?.NodeID || null;
+}
+
 /**
  * Duplicate a volume's contents into a new volume, possibly on another node.
  * Optional callbacks report progress: onSize(totalBytes|null) once, then

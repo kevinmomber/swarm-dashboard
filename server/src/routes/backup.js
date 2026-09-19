@@ -7,6 +7,7 @@ import {
   isRunning,
   listArchives,
   restoreArchive,
+  getActiveManager,
 } from '../backup.js';
 
 const router = Router();
@@ -34,7 +35,8 @@ router.get('/jobs', async (req, res, next) => {
 router.get('/history', async (req, res, next) => {
   try {
     const s = redact(await loadSettings());
-    res.json({ running: isRunning(), history: s.history || [] });
+    const manager = await getActiveManager().catch(() => null);
+    res.json({ running: isRunning(), manager, history: s.history || [] });
   } catch (err) {
     next(err);
   }

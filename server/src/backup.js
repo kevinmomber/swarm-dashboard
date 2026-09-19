@@ -275,6 +275,30 @@ export async function restoreArchive({ volume, file, clean, nodeId }) {
 
 let running = false;
 
+/**
+ * The node that actually executes backups (writes the archive / holds a local
+ * target path): the manager the dashboard is connected to. Cross-references the
+ * swarm node list to add hostname, role and leader status.
+ */
+export async function getActiveManager() {
+  await requireManager();
+  const info = await docker.info();
+  const nodeId = info.Swarm?.NodeID || null;
+  let hostname = info.Name || null;
+  let leader = null;
+  let reachability = null;
+  try {
+    const nodes = await docker.listNodes();
+    const me = nodes.find((n) => n.ID === nodeId);
+    if (me) {
+      hostname = me.Description?.Hostname || hostname;
+      leader = Boolean(me.ManagerStatus?.Leader);
+      reachability = me.ManagerStatus?.Reachability || null;
+    }
+  } catch { /* single-daemon / no swarm access — info.Name is enough */ }
+  return { nodeId, hostname, leader, reachability };
+}
+
 export async function runBackup({ jobId = 'default', trigger = 'manual', onProgress } = {}) {
   if (running) throw new Error('Ein Backup läuft bereits');
   running = true;

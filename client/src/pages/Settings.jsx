@@ -445,7 +445,21 @@ export default function Settings() {
       {section === 'backup' && (<>
       {/* Backup target */}
       <div className="card section">
-        <h2>Backup — Ziel</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <h2 style={{ marginBottom: 0 }}>Backup — Ziel</h2>
+          <div className="pill-group" title="Dieser Manager-Node führt die Backups aus und hält den lokalen Ziel-Pfad">
+            <span className="help" style={{ fontSize: 12 }}>Aktiver Manager:</span>
+            {hist?.manager?.hostname
+              ? <>
+                  <Badge kind="info">◈ {hist.manager.hostname}</Badge>
+                  {hist.manager.leader && <Badge kind="ok">Leader</Badge>}
+                </>
+              : <span className="help" style={{ fontSize: 12 }}>wird ermittelt…</span>}
+          </div>
+        </div>
+        <div className="help" style={{ marginTop: 4, marginBottom: 12 }}>
+          Backups werden auf diesem Manager-Node ausgeführt; ein „Lokaler Pfad" liegt auf dessen Host-Dateisystem.
+        </div>
         <div className="form-row">
           <div className="rl"><div className="t">Zieltyp</div></div>
           <div className="seg">

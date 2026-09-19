@@ -8,6 +8,10 @@ import {
   listArchives,
   restoreArchive,
   getActiveManager,
+  listServiceSpecs,
+  readServiceSpec,
+  restoreServiceSpec,
+  restoreServiceFull,
 } from '../backup.js';
 
 const router = Router();
@@ -98,6 +102,53 @@ router.post('/restore', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// Saved service specs in the target, grouped by service name.
+router.get('/service-specs', async (req, res, next) => {
+  try {
+    res.json(await listServiceSpecs());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Full content of one saved service spec (for viewing).
+router.get('/service-spec', async (req, res, next) => {
+  try {
+    res.json(await readServiceSpec(req.query.file));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Recreate/update a service from a saved spec (configuration only).
+router.post('/restore-service', async (req, res, next) => {
+  try {
+    const { file } = req.body || {};
+    if (!file) return res.status(400).json({ error: 'file erforderlich' });
+    res.json(await restoreServiceSpec({ file }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Combined restore: recreate service + restore its volume data (SSE progress).
+router.post('/restore-service-full', async (req, res) => {
+  const { file, clean } = req.body || {};
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (res.flushHeaders) res.flushHeaders();
+  const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+  try {
+    if (!file) throw new Error('file erforderlich');
+    const result = await restoreServiceFull({ file, clean: clean !== false, onProgress: (ev) => send(ev) });
+    send({ type: 'done', result });
+  } catch (e) {
+    send({ type: 'error', message: e.message });
+  }
+  res.end();
 });
 
 export default router;

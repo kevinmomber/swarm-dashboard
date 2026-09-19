@@ -123,6 +123,27 @@ async function prepareTarget(target, { withPassword } = {}) {
 const ts = () =>
   new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 
+/** Write a (small) text file into the prepared target via a base64 round-trip
+ *  (avoids all shell-quoting issues). Returns the written byte size. */
+async function writeTargetFile(prepared, relName, contentStr) {
+  const b = Buffer.from(contentStr, 'utf8').toString('base64');
+  const script =
+    `set -e; DIR="/target${prepared.sub}"; mkdir -p "$DIR"; ` +
+    `printf '%s' '${b}' | base64 -d > "$DIR/${relName}"; stat -c %s "$DIR/${relName}"`;
+  const { code, output } = await runEphemeral([prepared.bind], script);
+  if (code !== 0) throw new Error(output || `Exit ${code}`);
+  return parseInt(output.split('\n').pop().trim(), 10) || 0;
+}
+
+/** Read a text file from the prepared target as UTF-8 (base64 round-trip so the
+ *  ephemeral helper's printable-ASCII filter can't mangle it). */
+async function readTargetFile(prepared, relName) {
+  const script = `DIR="/target${prepared.sub}"; [ -f "$DIR/${relName}" ] || { echo __MISSING__; exit 3; }; base64 "$DIR/${relName}"`;
+  const { code, output } = await runEphemeral([prepared.bind], script);
+  if (code !== 0 || /__MISSING__/.test(output)) throw new Error('Datei im Ziel nicht gefunden');
+  return Buffer.from(output.replace(/\s+/g, ''), 'base64').toString('utf8');
+}
+
 /* ------------------------------------------------------------------ */
 /* Target inspection / test                                           */
 /* ------------------------------------------------------------------ */
@@ -270,6 +291,136 @@ export async function restoreArchive({ volume, file, clean, nodeId }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Service spec backup / restore                                      */
+/* ------------------------------------------------------------------ */
+
+const SPEC_RE = /^[\w][\w.-]*\.service\.json$/;
+
+/** List saved service specs in the target, grouped by service name (newest first). */
+export async function listServiceSpecs() {
+  await requireManager();
+  const settings = await loadSettings();
+  const storedPw = settings.backup.target?.smb?.password || '';
+  await ensureImage();
+  const { bind, sub, cleanup } = await prepareTarget(settings.backup.target, { withPassword: storedPw });
+  try {
+    const script = `DIR="/target${sub}"; cd "$DIR" 2>/dev/null || exit 0; for f in *.service.json; do [ -e "$f" ] || continue; printf '%s\\t%s\\n' "$f" "$(stat -c %s "$f")"; done`;
+    const { output } = await runEphemeral([bind], script);
+    const bySvc = {};
+    for (const line of output.split('\n').map((l) => l.trim()).filter(Boolean)) {
+      const [file, size] = line.split('\t');
+      const m = file.match(/^(.*)-\d{8}-\d{6}\.service\.json$/);
+      const name = m ? m[1] : file.replace(/\.service\.json$/, '');
+      (bySvc[name] = bySvc[name] || []).push({ file, bytes: parseInt(size, 10) || 0 });
+    }
+    for (const k of Object.keys(bySvc)) bySvc[k].sort((a, b) => b.file.localeCompare(a.file));
+    return bySvc;
+  } finally {
+    await cleanup();
+  }
+}
+
+/** Read + parse one saved service spec file ({ savedAt, serviceName, spec, ... }). */
+export async function readServiceSpec(file) {
+  await requireManager();
+  if (!SPEC_RE.test(file)) throw new Error('Ungültiger Spec-Dateiname');
+  const settings = await loadSettings();
+  const storedPw = settings.backup.target?.smb?.password || '';
+  await ensureImage();
+  const { bind, sub, cleanup } = await prepareTarget(settings.backup.target, { withPassword: storedPw });
+  try {
+    const text = await readTargetFile({ bind, sub }, file);
+    const parsed = JSON.parse(text);
+    if (!parsed?.spec?.Name) throw new Error('Spec-Datei enthält keine gültige Service-Spec');
+    return parsed;
+  } finally {
+    await cleanup();
+  }
+}
+
+/** Extract the pinned node (id/hostname) from a spec's placement constraints. */
+function pinnedNodeFromSpec(spec) {
+  const constraints = spec?.TaskTemplate?.Placement?.Constraints || [];
+  for (const c of constraints) {
+    const mId = c.match(/^\s*node\.id\s*==\s*(.+?)\s*$/i);
+    if (mId) return { nodeId: mId[1], hostname: null };
+    const mH = c.match(/^\s*node\.hostname\s*==\s*(.+?)\s*$/i);
+    if (mH) return { nodeId: null, hostname: mH[1] };
+  }
+  return { nodeId: null, hostname: null };
+}
+
+/** Create the service from spec if absent, otherwise update the existing one. */
+export async function restoreServiceSpec({ file }) {
+  await requireManager();
+  const meta = await readServiceSpec(file);
+  const spec = meta.spec;
+  const services = await docker.listServices();
+  const existing = services.find((s) => s.Spec?.Name === spec.Name);
+  if (existing) {
+    const info = await docker.getService(existing.ID).inspect();
+    await docker.getService(existing.ID).update({ ...spec, version: info.Version.Index });
+    return { ok: true, name: spec.Name, action: 'updated', id: existing.ID };
+  }
+  const created = await docker.createService(spec);
+  return { ok: true, name: spec.Name, action: 'created', id: created.id || created.ID || null };
+}
+
+/**
+ * Combined restore: recreate the service from its saved spec AND restore its
+ * named volumes' data. Order: (1) restore each named volume (latest matching
+ * archive) onto the spec's pinned node with a clean wipe, then (2) create/update
+ * the service so it comes up on the freshly-populated volumes.
+ */
+export async function restoreServiceFull({ file, clean = true, onProgress }) {
+  await requireManager();
+  const emit = (ev) => { try { onProgress?.(ev); } catch { /* ignore */ } };
+  const meta = await readServiceSpec(file);
+  const spec = meta.spec;
+  const pin = pinnedNodeFromSpec(spec);
+
+  // Resolve pinned hostname -> nodeId if needed.
+  let targetNode = pin.nodeId;
+  if (!targetNode && pin.hostname) {
+    try {
+      const nodes = await docker.listNodes();
+      targetNode = nodes.find((n) => n.Description?.Hostname === pin.hostname)?.ID || null;
+    } catch { /* ignore */ }
+  }
+
+  const mounts = spec?.TaskTemplate?.ContainerSpec?.Mounts || [];
+  const namedVols = mounts.filter((m) => m.Type === 'volume' && m.Source).map((m) => m.Source);
+
+  const archives = await listArchives();
+  const restored = [];
+  for (const vol of namedVols) {
+    const grp = archives[vol];
+    const latest = grp?.archives?.[0]?.file || null;
+    const vrec = { volume: vol, file: latest, ok: false, error: null, skipped: !latest };
+    if (!latest) { vrec.error = 'kein Archiv gefunden'; restored.push(vrec); emit({ type: 'volume', name: vol, ok: false, error: vrec.error }); continue; }
+    try {
+      emit({ type: 'volume', name: vol, phase: 'restore', file: latest });
+      await restoreArchive({ volume: vol, file: latest, clean, nodeId: targetNode });
+      vrec.ok = true;
+    } catch (e) { vrec.error = e.message; }
+    restored.push(vrec);
+    emit({ type: 'volume', name: vol, ok: vrec.ok, error: vrec.error });
+  }
+
+  emit({ type: 'service', name: spec.Name, phase: 'apply' });
+  const svcResult = await restoreServiceSpec({ file });
+  emit({ type: 'service', name: spec.Name, phase: 'done', action: svcResult.action });
+
+  const failed = restored.filter((r) => !r.ok).length;
+  return {
+    ok: failed === 0,
+    service: svcResult,
+    node: targetNode || null,
+    volumes: restored,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Backup run                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -412,6 +563,37 @@ export async function runBackup({ jobId = 'default', trigger = 'manual', onProgr
       emit({ type: 'volume', phase: 'done', index, total: planned.length, name: vol.name, label: rec.label, ok: rec.ok, bytes: rec.bytes, error: rec.error });
       entry.volumes.push(rec);
     }
+
+    // Service specs: save each tagged service's full Swarm spec as JSON so the
+    // service can be recreated exactly as it was at backup time.
+    entry.services = [];
+    for (const svc of services) {
+      const srec = { name: svc.name, stack: svc.stack || null, file: null, bytes: 0, ok: false, error: null };
+      try {
+        emit({ type: 'service', phase: 'spec', name: svc.name });
+        const full = await docker.getService(svc.id).inspect();
+        const payload = JSON.stringify({
+          savedAt: new Date().toISOString(),
+          serviceName: svc.name,
+          serviceId: svc.id,
+          stack: svc.stack || null,
+          tag: svc.tag || null,
+          spec: full.Spec,
+        }, null, 2);
+        const file = `${svc.name}-${stamp}.service.json`;
+        const size = await writeTargetFile(prepared, file, payload);
+        // Retention: keep the newest N spec files per service.
+        await runEphemeral([prepared.bind],
+          `DIR="/target${prepared.sub}"; ls -1t "$DIR/${svc.name}-"*.service.json 2>/dev/null | tail -n +${keep + 1} | xargs -r rm -f; true`,
+        ).catch(() => {});
+        srec.file = file; srec.bytes = size; srec.ok = true;
+      } catch (e) {
+        srec.error = e.message;
+      }
+      emit({ type: 'service', phase: 'done', name: svc.name, ok: srec.ok, error: srec.error });
+      entry.services.push(srec);
+    }
+
     const failed = entry.volumes.filter((v) => !v.ok).length;
     entry.status = failed === 0 ? 'success' : entry.volumes.some((v) => v.ok) ? 'partial' : 'failed';
   } catch (e) {

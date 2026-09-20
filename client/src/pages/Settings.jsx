@@ -10,6 +10,7 @@ import MonitoringSection from '../components/MonitoringSection.jsx';
 import RegistriesGitSection from '../components/RegistriesGitSection.jsx';
 import AuditSection from '../components/AuditSection.jsx';
 import EndpointsSection from '../components/EndpointsSection.jsx';
+import SecretVaultSection from '../components/SecretVaultSection.jsx';
 import GitOpsSection from '../components/GitOpsSection.jsx';
 
 const CRON_PRESETS = [
@@ -29,6 +30,7 @@ const SECTIONS = [
   { key: 'endpoints', label: 'Docker-Endpoints' },
   { key: 'proxy', label: 'Reverse Proxy' },
   { key: 'backup', label: 'Backup' },
+  { key: 'secretvault', label: 'Secret-Tresor' },
   { key: 'audit', label: 'Audit-Log' },
 ];
 
@@ -269,6 +271,7 @@ export default function Settings() {
       {section === 'registries' && <RegistriesGitSection />}
       {section === 'gitops' && <GitOpsSection />}
       {section === 'endpoints' && <EndpointsSection />}
+      {section === 'secretvault' && <SecretVaultSection />}
       {section === 'audit' && <AuditSection />}
 
       {section === 'proxy' && (

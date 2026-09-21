@@ -4,6 +4,7 @@ import {
   applyProxyToService,
   removeProxyFromService,
   setServiceMtls,
+  setServiceTailnet,
   reconcilePkiProxy,
   generateNginxConfig,
   buildProxyCompose,
@@ -92,6 +93,16 @@ router.delete('/apply/:id', async (req, res, next) => {
 router.post('/mtls/:id', async (req, res, next) => {
   try {
     res.json(await setServiceMtls(req.params.id, (req.body && req.body.mode) || 'off'));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Toggle per-service Tailscale exposure (tailnet opt-in).
+router.post('/tailnet/:id', async (req, res, next) => {
+  try {
+    const on = Boolean(req.body && (req.body.on ?? req.body.enable));
+    res.json(await setServiceTailnet(req.params.id, on));
   } catch (err) {
     next(err);
   }

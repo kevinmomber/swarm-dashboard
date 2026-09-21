@@ -15,6 +15,7 @@ export const PROXY_HOST_LABEL = 'swarmdash.proxy.host';
 export const PROXY_PORT_LABEL = 'swarmdash.proxy.port';
 export const PROXY_ENTRYPOINTS_LABEL = 'swarmdash.proxy.entrypoints';
 export const PROXY_MTLS_LABEL = 'swarmdash.proxy.mtls'; // off | optional | require
+export const PROXY_TAILNET_LABEL = 'swarmdash.proxy.tailnet'; // 'true' -> reachable over Tailscale (via the dedicated tailnet entrypoint)
 export const GROUP_LABEL = 'swarmdash.tag';
 export const MONITOR_LABEL = 'swarmdash.monitor';
 
@@ -58,6 +59,15 @@ const DEFAULTS = {
     traefikImage: 'traefik:v3.7.13', // pinned traefik image (configurable, avoid :latest)
     dashboard: true, // deploy the traefik dashboard alongside the proxy
     tls: true,
+    // Tailscale/DockTail exposure (A-verfeinert): a dedicated Traefik entrypoint
+    // that only DockTail publishes over the tailnet; services opt in per label.
+    tailscale: {
+      enable: false, // master toggle for the DockTail/Tailscale feature
+      entrypointPort: 8443, // internal+host-published port for the 'tailnet' entrypoint
+      funnel: false, // expose the tailnet entrypoint publicly via Tailscale Funnel
+      hostname: 'swarmdash', // tailscale sidecar hostname / service name base
+      tailnet: '', // informational: your tailnet (…​.ts.net), for display only
+    },
   },
   monitoring: {
     enabled: false,

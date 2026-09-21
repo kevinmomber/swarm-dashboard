@@ -13,6 +13,7 @@ import {
   PROXY_PORT_LABEL,
   PROXY_ENTRYPOINTS_LABEL,
   PROXY_MTLS_LABEL,
+  PROXY_TAILNET_LABEL,
 } from './settings.js';
 
 export const PROXY_STACK = 'swarmdash-proxy';
@@ -48,6 +49,24 @@ function serviceEntrypoints(labels, proxy) {
   if (sel === 'websecure' || sel === 'secure') return { web: false, secure: true };
   if (sel === 'both' || sel === 'web,websecure' || sel === 'websecure,web') return { web: true, secure: true };
   return proxy.tls ? { web: false, secure: true } : { web: true, secure: false };
+}
+
+/** Tailscale/DockTail config with safe defaults. */
+function tailscaleCfg(proxy) {
+  const t = proxy?.tailscale || {};
+  return {
+    enable: Boolean(t.enable),
+    entrypointPort: Number(t.entrypointPort) || 8443,
+    funnel: Boolean(t.funnel),
+    hostname: (t.hostname || 'swarmdash').toString(),
+    tailnet: (t.tailnet || '').toString(),
+  };
+}
+
+/** Is a service opted in to Tailscale exposure? */
+function wantsTailnet(labels) {
+  const v = String(labels[PROXY_TAILNET_LABEL] ?? '').trim().toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes';
 }
 
 /** Build the Traefik deploy labels for a service. */
@@ -106,6 +125,21 @@ export function traefikLabels(serviceName, spec, labels, proxy) {
     out[`traefik.http.routers.${r}.service`] = r;
     if (route.mode === 'path') out[`traefik.http.routers.${r}.middlewares`] = `${r}-strip`;
   }
+
+  // Tailscale exposure (A-verfeinert): a dedicated, host-independent router on the
+  // 'tailnet' entrypoint that DockTail publishes over the tailnet. Only added when
+  // the feature is enabled AND the service opted in. Path-based so it matches the
+  // ts.net hostname regardless of the internal Host() rule; Tailscale terminates
+  // TLS, so this router is plain HTTP. Reachable at https://<ts-host>/<serviceName>.
+  const ts = tailscaleCfg(proxy);
+  if (ts.enable && wantsTailnet(labels)) {
+    const tp = `/${serviceName}`;
+    out[`traefik.http.routers.${r}-tailnet.entrypoints`] = 'tailnet';
+    out[`traefik.http.routers.${r}-tailnet.rule`] = `PathPrefix(\`${tp}\`)`;
+    out[`traefik.http.routers.${r}-tailnet.service`] = r;
+    out[`traefik.http.routers.${r}-tailnet.middlewares`] = `${r}-tailnet-strip`;
+    out[`traefik.http.middlewares.${r}-tailnet-strip.stripprefix.prefixes`] = tp;
+  }
   return out;
 }
 
@@ -116,7 +150,8 @@ function isManagedProxyLabel(key) {
     || key === PROXY_HOST_LABEL
     || key === PROXY_PORT_LABEL
     || key === PROXY_ENTRYPOINTS_LABEL
-    || key === PROXY_MTLS_LABEL;
+    || key === PROXY_MTLS_LABEL
+    || key === PROXY_TAILNET_LABEL;
 }
 
 /** Apply Traefik labels to a single service and attach it to the proxy network. */
@@ -214,6 +249,20 @@ export async function setServiceMtls(serviceId, mode) {
   return { mtls: m, ...applied };
 }
 
+/** Toggle per-service Tailscale exposure (the tailnet opt-in label) + re-apply. */
+export async function setServiceTailnet(serviceId, on) {
+  await requireManager();
+  const svc = docker.getService(serviceId);
+  const info = await svc.inspect();
+  const spec = structuredClone(info.Spec);
+  spec.Labels = spec.Labels || {};
+  if (on) spec.Labels[PROXY_TAILNET_LABEL] = 'true';
+  else delete spec.Labels[PROXY_TAILNET_LABEL];
+  await svc.update({ version: info.Version.Index, ...spec });
+  const applied = await applyProxyToService(serviceId);
+  return { tailnet: Boolean(on), ...applied };
+}
+
 /** List services tagged for reverse-proxy use (+ resolved routing). */
 export async function listProxyServices() {
   await requireManager();
@@ -243,6 +292,7 @@ export async function listProxyServices() {
       port: servicePort(s.Spec, labels[PROXY_PORT_LABEL]),
       entrypoints: labels[PROXY_ENTRYPOINTS_LABEL] || null,
       mtls: labels[PROXY_MTLS_LABEL] || null,
+      tailnet: wantsTailnet(labels),
       applied: Boolean(labels['traefik.enable']),
       attached,
       route,
@@ -443,6 +493,12 @@ export async function buildProxyCompose(proxy, nginxConf, dockerProxyConf, pki =
       '--entrypoints.web.address=:80',
       '--entrypoints.websecure.address=:443',
     ];
+    const ts = tailscaleCfg(proxy);
+    if (ts.enable) {
+      // Dedicated entrypoint only reachable by the local DockTail/Tailscale
+      // sidecar; Tailscale terminates TLS and forwards plain HTTP here.
+      cmd.push(`--entrypoints.tailnet.address=:${ts.entrypointPort}`);
+    }
     const usePki = proxy.tlsSource === 'internal-pki' && pki && pki.configs.length > 0;
     const useAcme = proxy.tls && !usePki && proxy.certResolver && proxy.acmeEmail;
     if (usePki) {
@@ -505,6 +561,7 @@ export async function buildProxyCompose(proxy, nginxConf, dockerProxyConf, pki =
     lines.push('      - { target: 80, published: 80, mode: host }');
     lines.push('      - { target: 443, published: 443, mode: host }');
     if (dashInsecure) lines.push('      - { target: 8080, published: 8080, mode: host }');
+    if (ts.enable) lines.push(`      - { target: ${ts.entrypointPort}, published: ${ts.entrypointPort}, mode: host }`);
     if (useAcme) {
       lines.push('    volumes:');
       lines.push('      - traefik-acme:/acme');

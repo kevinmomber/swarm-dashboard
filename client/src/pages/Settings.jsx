@@ -11,6 +11,7 @@ import RegistriesGitSection from '../components/RegistriesGitSection.jsx';
 import AuditSection from '../components/AuditSection.jsx';
 import EndpointsSection from '../components/EndpointsSection.jsx';
 import SecretVaultSection from '../components/SecretVaultSection.jsx';
+import TailscaleSection from '../components/TailscaleSection.jsx';
 import GitOpsSection from '../components/GitOpsSection.jsx';
 
 const CRON_PRESETS = [
@@ -29,6 +30,7 @@ const SECTIONS = [
   { key: 'gitops', label: 'GitOps' },
   { key: 'endpoints', label: 'Docker-Endpoints' },
   { key: 'proxy', label: 'Reverse Proxy' },
+  { key: 'tailscale', label: 'Tailscale / DockTail' },
   { key: 'backup', label: 'Backup' },
   { key: 'secretvault', label: 'Secret-Tresor' },
   { key: 'audit', label: 'Audit-Log' },
@@ -51,6 +53,7 @@ export default function Settings() {
   const { data: proxyStatus, reload: reloadProxyStatus } = useApi('/proxy/status', { poll: 8000 });
   const { data: pkiCa } = useApi('/pki/ca', { poll: 0 });
   const { data: hist, reload: reloadHist } = useApi('/backup/history', { poll: 8000 });
+  const { data: tsStatus } = useApi('/tailscale/status', { poll: 0 });
 
   const [target, setTarget] = useState(null);
   const [jobs, setJobs] = useState([]);
@@ -211,6 +214,15 @@ export default function Settings() {
     } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
   };
 
+  const setTailnet = async (id, on) => {
+    setBusy(true);
+    try {
+      await api.post(`/proxy/tailnet/${id}`, { on });
+      toast(on ? 'Über Tailscale freigegeben (Proxy-Stack ggf. aktualisieren)' : 'Tailscale-Freigabe entfernt', 'ok');
+      reloadProxy();
+    } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
+  };
+
   const deployProxyStack = async () => {
     setBusy(true);
     try {
@@ -272,6 +284,7 @@ export default function Settings() {
       {section === 'gitops' && <GitOpsSection />}
       {section === 'endpoints' && <EndpointsSection />}
       {section === 'secretvault' && <SecretVaultSection />}
+      {section === 'tailscale' && <TailscaleSection />}
       {section === 'audit' && <AuditSection />}
 
       {section === 'proxy' && (
@@ -380,6 +393,13 @@ export default function Settings() {
                                   <button className="btn sm" disabled={busy} onClick={() => issueCertFor(s.route.host)} title={`Zertifikat für ${s.route.host} ausstellen`}>Zertifikat</button>
                                 )}
                                 <button className="btn sm" disabled={busy} onClick={() => applyProxy(s.id)}>Labels anwenden</button>
+                                {tsStatus?.enabled && (
+                                  <button className={`btn sm ${s.tailnet ? 'primary' : ''}`} disabled={busy}
+                                    title="Über Tailscale (tailnet-Entrypoint) freigeben/sperren"
+                                    onClick={() => setTailnet(s.id, !s.tailnet)}>
+                                    {s.tailnet ? '✓ Tailscale' : 'Tailscale'}
+                                  </button>
+                                )}
                                 <button className="btn sm danger" disabled={busy} onClick={() => removeProxy(s.id)}>Entfernen</button>
                               </div>
                             : <span className="help">via Config</span>}</td>

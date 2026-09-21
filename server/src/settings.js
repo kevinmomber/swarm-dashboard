@@ -59,15 +59,25 @@ const DEFAULTS = {
     traefikImage: 'traefik:v3.7.13', // pinned traefik image (configurable, avoid :latest)
     dashboard: true, // deploy the traefik dashboard alongside the proxy
     tls: true,
-    // Tailscale/DockTail exposure (A-verfeinert): a dedicated Traefik entrypoint
-    // that only DockTail publishes over the tailnet; services opt in per label.
-    tailscale: {
-      enable: false, // master toggle for the DockTail/Tailscale feature
-      entrypointPort: 8443, // internal+host-published port for the 'tailnet' entrypoint
-      funnel: false, // expose the tailnet entrypoint publicly via Tailscale Funnel
-      hostname: 'swarmdash', // tailscale sidecar hostname / service name base
-      tailnet: '', // informational: your tailnet (…​.ts.net), for display only
-    },
+  },
+  // Tailscale + DockTail: run tailscaled and DockTail as a managed stack and
+  // expose selected services over the tailnet. A-verfeinert: DockTail publishes
+  // ONLY Traefik's dedicated 'tailnet' entrypoint; services opt in per label
+  // (swarmdash.proxy.tailnet=true) which adds a path router on that entrypoint.
+  tailscale: {
+    enable: false, // master toggle for the whole feature
+    image: 'tailscale/tailscale:latest', // sidecar image (pin in prod)
+    docktailImage: 'ghcr.io/marvinvr/docktail:latest', // docktail image
+    hostname: 'swarmdash', // tailscale node hostname (becomes the tailnet host)
+    authKey: '', // TS_AUTHKEY (secret; server-side only, never returned)
+    tags: 'tag:server', // --advertise-tags for the sidecar
+    oauthClientId: '', // optional: DockTail auto service creation
+    oauthClientSecret: '', // secret; server-side only
+    userspace: false, // true = TS_USERSPACE (no /dev/net/tun); false = kernel mode
+    funnel: false, // expose the tailnet entrypoint publicly via Funnel
+    entrypointPort: 8443, // must match the Traefik 'tailnet' entrypoint
+    serviceName: 'apps', // DockTail service name (tailnet hostname for the Traefik entrypoint)
+    tailnet: '', // informational: your tailnet (….ts.net), display only
   },
   monitoring: {
     enabled: false,
@@ -147,6 +157,12 @@ export function redact(settings) {
   if (Array.isArray(s.monitorLog)) s.monitorLog = s.monitorLog.slice(-100).reverse();
   if (Array.isArray(s.registries)) s.registries = s.registries.map(({ password, ...r }) => ({ ...r, hasPassword: Boolean(password) }));
   if (Array.isArray(s.git)) s.git = s.git.map(({ token, ...g }) => ({ ...g, hasToken: Boolean(token) }));
+
+  const ts = s.tailscale;
+  if (ts) {
+    ts.hasAuthKey = Boolean(ts.authKey); delete ts.authKey;
+    ts.hasOauthSecret = Boolean(ts.oauthClientSecret); delete ts.oauthClientSecret;
+  }
   return s;
 }
 
@@ -167,11 +183,14 @@ export function applyPatch(current, patch) {
   keepSecret(['monitoring', 'alerts', 'mqtt'], 'password');
   keepSecret(['monitoring', 'alerts', 'matrix'], 'accessToken');
   keepSecret(['monitoring', 'alerts', 'email'], 'pass');
+  keepSecret(['tailscale'], 'authKey');
+  keepSecret(['tailscale'], 'oauthClientSecret');
 
   if (merged.backup?.target?.smb) delete merged.backup.target.smb.hasPassword;
   if (merged.monitoring?.alerts?.mqtt) delete merged.monitoring.alerts.mqtt.hasPassword;
   if (merged.monitoring?.alerts?.matrix) delete merged.monitoring.alerts.matrix.hasToken;
   if (merged.monitoring?.alerts?.email) delete merged.monitoring.alerts.email.hasPass;
+  if (merged.tailscale) { delete merged.tailscale.hasAuthKey; delete merged.tailscale.hasOauthSecret; }
 
   merged.history = current.history || []; // managed by the backup engine
   merged.monitorLog = current.monitorLog || []; // managed by the monitor

@@ -159,6 +159,7 @@ export async function applyProxyToService(serviceId) {
   await requireManager();
   const settings = await loadSettings();
   const proxy = settings.reverseProxy;
+  proxy.tailscale = settings.tailscale;
   if (proxy.type !== 'traefik') {
     throw new Error('Automatisches Anwenden ist nur für Traefik verfügbar (nginx: Config generieren).');
   }
@@ -483,6 +484,7 @@ export function traefikImage(proxy) {
 
 /** Build the docker-stack compose (YAML string) for the configured proxy. */
 export async function buildProxyCompose(proxy, nginxConf, dockerProxyConf, pki = null) {
+  if (!proxy.tailscale) { try { proxy = { ...proxy, tailscale: (await loadSettings()).tailscale }; } catch { /* ignore */ } }
   const net = proxyNetwork(proxy);
   if (proxy.type === 'traefik') {
     const cmd = [
@@ -573,6 +575,23 @@ export async function buildProxyCompose(proxy, nginxConf, dockerProxyConf, pki =
         lines.push(`        target: ${c.target}`);
       }
     }
+    if (ts.enable) {
+      // Container labels so the DockTail sidecar publishes ONLY Traefik's
+      // dedicated 'tailnet' entrypoint as a single Tailscale service. Individual
+      // apps are gated at the Traefik layer (per-service -tailnet routers).
+      // direct=false -> DockTail reaches Traefik via the host-published port.
+      lines.push('    labels:');
+      lines.push('      - "docktail.service.enable=true"');
+      lines.push(`      - "docktail.service.name=${ts.serviceName || 'apps'}"`);
+      lines.push(`      - "docktail.service.port=${ts.entrypointPort}"`);
+      lines.push('      - "docktail.service.direct=false"');
+      lines.push('      - "docktail.service.service-port=443"');
+      if (ts.funnel) {
+        lines.push('      - "docktail.funnel.enable=true"');
+        lines.push(`      - "docktail.funnel.port=${ts.entrypointPort}"`);
+        lines.push('      - "docktail.funnel.funnel-port=443"');
+      }
+    }
     lines.push('    networks:');
     lines.push(`      - proxynet`);
     lines.push('    deploy:');
@@ -649,6 +668,7 @@ export async function deployProxyStack() {
   await requireManager();
   const settings = await loadSettings();
   const proxy = settings.reverseProxy;
+  proxy.tailscale = settings.tailscale;
   if (proxy.type !== 'traefik' && proxy.type !== 'nginx') {
     throw new Error('Kein Reverse Proxy ausgewählt. Bitte zuerst Typ (Traefik/nginx) wählen und speichern.');
   }

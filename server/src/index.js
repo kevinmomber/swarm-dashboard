@@ -28,6 +28,7 @@ import builderRouter from './routes/builder.js';
 import auditRouter from './routes/audit.js';
 import endpointsRouter from './routes/endpoints.js';
 import secretVaultRouter from './routes/secretvault.js';
+import tailscaleRouter from './routes/tailscale.js';
 import { auditMiddleware } from './audit.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
@@ -69,6 +70,7 @@ api.use('/builder', builderRouter);
 api.use('/audit', auditRouter);
 api.use('/endpoints', endpointsRouter);
 api.use('/secret-vault', secretVaultRouter);
+api.use('/tailscale', tailscaleRouter);
 api.use('/', clusterRouter); // /containers /images
 api.use('/', miscRouter); // /networks /volumes /secrets /configs
 app.use('/api', api);

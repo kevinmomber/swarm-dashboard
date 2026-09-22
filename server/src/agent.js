@@ -23,7 +23,7 @@ import { readFile, statfs } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import Docker from 'dockerode';
 import { WebSocketServer } from 'ws';
-import { exportVolume, importVolume, volumeSize } from './volarchive.js';
+import { exportVolume, importVolume, volumeSize, migrationDiskProbe } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
 
@@ -248,6 +248,11 @@ const server = http.createServer(async (req, res) => {
       const name = u.searchParams.get('name');
       if (!name) { res.statusCode = 400; return json({ error: 'name fehlt' }); }
       return json({ bytes: await volumeSize(name) });
+    }
+    if (u.pathname === '/migration-preflight') {
+      const source = u.searchParams.get('source');
+      if (!source) { res.statusCode = 400; return json({ error: 'source fehlt' }); }
+      return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, ...(await migrationDiskProbe(source)) });
     }
     if (u.pathname === '/container-binds') {
       return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, binds: await localContainerBinds() });

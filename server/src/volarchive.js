@@ -71,3 +71,47 @@ export async function volumeSize(volumeName) {
   const kb = parseInt((output || '').trim(), 10);
   return Number.isFinite(kb) ? kb * 1024 : null;
 }
+
+/**
+ * Disk pre-flight probe for a bind→volume migration, run ON THE NODE that will
+ * host the new volume. Mounts the bind source read-only and a throwaway probe
+ * volume, then reports:
+ *  - sizeBytes: apparent size of the bind data (du) — how much the new volume needs
+ *  - storeFreeBytes / storeTotalBytes: free/total space on the filesystem where
+ *    Docker actually stores volumes (df of the probe volume's mountpoint)
+ * The probe volume lives in the same storage as the future volume, so df is
+ * accurate even when Docker's data-root is on a separate partition from host /.
+ */
+export async function migrationDiskProbe(bindSource) {
+  if (!bindSource || !bindSource.startsWith('/')) throw new Error('Ungültiger Bind-Quellpfad');
+  await ensureImage();
+  const probeVol = `swarmdash_probe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  await docker.createVolume({ Name: probeVol }).catch(() => {});
+  try {
+    const script =
+      'SZ=$(du -sk /src 2>/dev/null | tail -n1 | cut -f1); ' +
+      'DF=$(df -Pk /store 2>/dev/null | tail -n1); ' +
+      `echo "SIZE_KB=$SZ"; echo "DF=$DF"`;
+    const { output } = await runEphemeral([`${bindSource}:/src:ro`, `${probeVol}:/store`], script);
+    let sizeBytes = null; let storeTotalBytes = null; let storeFreeBytes = null; let mountpoint = null;
+    for (const line of (output || '').split('\n').map((l) => l.trim())) {
+      const mSz = line.match(/^SIZE_KB=(\d+)/);
+      if (mSz) sizeBytes = parseInt(mSz[1], 10) * 1024;
+      const mDf = line.match(/^DF=(.+)/);
+      if (mDf) {
+        // df -Pk: Filesystem 1024-blocks Used Available Capacity Mounted-on
+        const parts = mDf[1].trim().split(/\s+/);
+        if (parts.length >= 6) {
+          const total = parseInt(parts[1], 10);
+          const avail = parseInt(parts[3], 10);
+          if (Number.isFinite(total)) storeTotalBytes = total * 1024;
+          if (Number.isFinite(avail)) storeFreeBytes = avail * 1024;
+          mountpoint = parts.slice(5).join(' ');
+        }
+      }
+    }
+    return { sizeBytes, storeTotalBytes, storeFreeBytes, mountpoint };
+  } finally {
+    await docker.getVolume(probeVol).remove().catch(() => {});
+  }
+}

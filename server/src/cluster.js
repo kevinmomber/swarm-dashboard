@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { listAgents, agentBaseForNode } from './metrics.js';
-import { exportVolume, importVolume, volumeSize } from './volarchive.js';
+import { exportVolume, importVolume, volumeSize, migrationDiskProbe } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
 
@@ -704,6 +704,7 @@ export async function listBindMounts() {
 /* --------------------------- migration ----------------------------- */
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fmtGb = (b) => (b == null ? '—' : `${(b / (1024 ** 3)).toFixed(2)} GB`);
 
 async function containerStateOf(nodeId, id, localId) {
   const local = !nodeId || nodeId === localId;
@@ -725,15 +726,91 @@ async function stopContainerOf(nodeId, id, localId) {
   if (!r.ok) throw new Error(`Container stoppen fehlgeschlagen (HTTP ${r.status})`);
 }
 
+/** Run the node-local disk probe for a data node (local manager or via agent). */
+async function diskProbeOnNode(nodeId, source, localId) {
+  const local = !nodeId || nodeId === localId;
+  if (local) return migrationDiskProbe(source);
+  const base = await agentBaseForNode(nodeId);
+  if (!base) throw new Error('Node nicht erreichbar (Agent erforderlich)');
+  const r = await fetchWithTimeout(`${base}/migration-preflight?source=${encodeURIComponent(source)}`, {}, 60000);
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `Preflight fehlgeschlagen (HTTP ${r.status})`); }
+  return r.json();
+}
+
+/**
+ * Disk pre-flight for a bind→volume migration. The new volume is created on the
+ * SAME node that holds the bind data, and the original bind is kept as a fallback
+ * → that node needs free space for a second copy of the data. Measures the bind
+ * size and the free space in that node's Docker volume storage and returns a
+ * verdict with a safety margin. The manager only streams bytes through (no disk
+ * staging) unless it IS the data node, so we gate solely on the data node.
+ */
+export async function migrationPreflight({ kind, nodeId, source }) {
+  await requireManager();
+  if (!source) throw new Error('source erforderlich');
+  const info = await docker.info();
+  const localId = info.Swarm?.NodeID || null;
+  const dataNodeId = nodeId || localId;
+
+  const hostById = new Map();
+  try { for (const n of await docker.listNodes()) hostById.set(n.ID, n.Description?.Hostname || null); } catch { /* ignore */ }
+
+  const probe = await diskProbeOnNode(dataNodeId, source, localId);
+  const sizeBytes = probe.sizeBytes ?? null;
+  const freeBytes = probe.storeFreeBytes ?? null;
+
+  // Safety margin: 256 MiB fixed slack plus 5% of the data, to cover fs overhead,
+  // container churn and the not-perfectly-accurate `du` apparent size.
+  const SLACK = 256 * 1024 * 1024;
+  const margin = sizeBytes != null ? Math.round(sizeBytes * 0.05) + SLACK : SLACK;
+  const needed = (sizeBytes ?? 0) + margin;
+
+  let verdict = 'unknown';
+  if (sizeBytes != null && freeBytes != null) {
+    if (freeBytes >= needed) verdict = 'ok';
+    else if (freeBytes >= sizeBytes) verdict = 'tight'; // fits raw, but under the safety margin
+    else verdict = 'insufficient';
+  }
+
+  return {
+    kind: kind || null,
+    dataNode: { nodeId: dataNodeId, hostname: hostById.get(dataNodeId) || null, isManager: dataNodeId === localId },
+    source,
+    sizeBytes,
+    freeBytes,
+    totalBytes: probe.storeTotalBytes ?? null,
+    mountpoint: probe.mountpoint || null,
+    neededBytes: needed,
+    marginBytes: margin,
+    verdict,
+    managerIsDataNode: dataNodeId === localId,
+  };
+}
+
 /** Migrate a standalone container's bind mount to a named volume.
  *  With stop=true the container is stopped first; otherwise it must already be stopped. */
-export async function migrateContainer({ nodeId, id, source, target, newName, stop, onPhase, onSize, onBytes }) {
+export async function migrateContainer({ nodeId, id, source, target, newName, stop, force, onPhase, onSize, onBytes }) {
   await requireManager();
   if (!id || !source || !target || !newName) throw new Error('id, source, target, newName erforderlich');
   const info = await docker.info();
   const localId = info.Swarm?.NodeID || null;
 
   onPhase?.('check');
+  // Disk pre-flight: refuse when the data node clearly lacks room for a 2nd copy.
+  if (!force) {
+    try {
+      const pf = await migrationPreflight({ kind: 'container', nodeId, source });
+      onPhase?.('preflight');
+      onSize?.(pf.sizeBytes ?? null);
+      if (pf.verdict === 'insufficient') {
+        throw new Error(`Nicht genügend Speicher auf Node „${pf.dataNode.hostname || 'Ziel'}": frei ${fmtGb(pf.freeBytes)}, benötigt ~${fmtGb(pf.neededBytes)} (Daten ${fmtGb(pf.sizeBytes)}). Migration abgebrochen. Mit „force" überschreibbar.`);
+      }
+    } catch (e) {
+      if (/Nicht genügend Speicher/.test(e.message)) throw e;
+      // Probe failure shouldn't hard-block a forced-capable flow; surface as phase.
+      onPhase?.('preflight-skip');
+    }
+  }
   let st = await containerStateOf(nodeId, id, localId);
   if (st.running) {
     if (!stop) throw new Error('Container läuft — Stoppen nicht bestätigt');
@@ -766,11 +843,25 @@ export async function migrateContainer({ nodeId, id, source, target, newName, st
 
 /** Migrate a swarm service's bind mount to a named volume.
  *  With stop=true the service is scaled to 0 first; otherwise it must already be stopped. */
-export async function migrateService({ id, source, target, newName, nodeId, stop, onPhase, onSize, onBytes }) {
+export async function migrateService({ id, source, target, newName, nodeId, stop, force, onPhase, onSize, onBytes }) {
   await requireManager();
   if (!id || !source || !target || !newName || !nodeId) throw new Error('id, source, target, newName, nodeId erforderlich');
 
   onPhase?.('check');
+  // Disk pre-flight on the node that will hold the new volume (the pinned data node).
+  if (!force) {
+    try {
+      const pf = await migrationPreflight({ kind: 'service', nodeId, source });
+      onPhase?.('preflight');
+      onSize?.(pf.sizeBytes ?? null);
+      if (pf.verdict === 'insufficient') {
+        throw new Error(`Nicht genügend Speicher auf Node „${pf.dataNode.hostname || 'Ziel'}": frei ${fmtGb(pf.freeBytes)}, benötigt ~${fmtGb(pf.neededBytes)} (Daten ${fmtGb(pf.sizeBytes)}). Migration abgebrochen. Mit „force" überschreibbar.`);
+      }
+    } catch (e) {
+      if (/Nicht genügend Speicher/.test(e.message)) throw e;
+      onPhase?.('preflight-skip');
+    }
+  }
   const svc = await docker.getService(id).inspect();
   const origReplicas = svc.Spec.Mode?.Replicated?.Replicas ?? null;
   const countRunning = async () => (await docker.listTasks({ filters: { service: [id] } }))

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
-import { listVolumes, volumeUsage, volumeRemove, volumeCreate, volumeRename, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
+import { listVolumes, volumeUsage, volumeRemove, volumeCreate, volumeRename, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, migrationPreflight, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
 
 const router = Router();
 
@@ -97,6 +97,13 @@ router.get('/binds', async (req, res, next) => {
   try {
     res.json(await listBindMounts());
   } catch (err) { next(err); }
+});
+// Disk pre-check for a bind→volume migration (does the data node have room?).
+router.post('/migrate/preflight', async (req, res, next) => {
+  try {
+    const { kind, nodeId, source } = req.body || {};
+    res.json(await migrationPreflight({ kind, nodeId, source }));
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 router.post('/migrate', async (req, res, next) => {
   const { kind, ...rest } = req.body || {};

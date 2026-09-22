@@ -324,6 +324,9 @@ function MigrationModal({ row, onClose, onDone }) {
   const [chk, setChk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
+  const [pre, setPre] = useState(null);      // preflight result
+  const [preBusy, setPreBusy] = useState(false);
+  const [force, setForce] = useState(false);
 
   useEffect(() => {
     if (row.kind === 'service') {
@@ -339,21 +342,39 @@ function MigrationModal({ row, onClose, onDone }) {
     }
   }, [row.kind]);
 
+  // Disk pre-check: (re)run whenever the effective data node is known/changes.
+  const dataNodeId = row.kind === 'service' ? node : row.nodeId;
+  useEffect(() => {
+    if (row.kind === 'service' && !node) return;
+    let cancelled = false;
+    setPre(null); setForce(false); setPreBusy(true);
+    api.post('/migrate/preflight', { kind: row.kind, nodeId: dataNodeId, source: row.source })
+      .then((r) => { if (!cancelled) setPre(r); })
+      .catch((e) => { if (!cancelled) setPre({ verdict: 'error', error: e.message }); })
+      .finally(() => { if (!cancelled) setPreBusy(false); });
+    return () => { cancelled = true; };
+  }, [row.kind, row.source, dataNodeId]);
+
   const phaseLabel = (ph) => ({
     check: 'Status prüfen…',
+    preflight: 'Speicher-Vorabprüfung…',
+    'preflight-skip': 'Vorabprüfung übersprungen…',
     stop: row.kind === 'service' ? 'Service stoppen (Skalierung auf 0)…' : 'Container stoppen…',
     copy: 'Daten kopieren…',
     finalize: row.kind === 'service' ? 'Service-Spec aktualisieren…' : 'Container neu aufbauen…',
     done: 'Fertig',
   }[ph] || ph);
 
+  const insufficient = pre?.verdict === 'insufficient';
+  const startDisabled = busy || !chk || !newName || (row.kind === 'service' && !node) || preBusy || (insufficient && !force);
+
   const run = async () => {
     setBusy(true); setProg({ phase: 'check', total: null, bytes: 0, done: false });
     let err = null;
     try {
       const body = row.kind === 'service'
-        ? { kind: 'service', id: row.id, source: row.source, target: row.target, newName, nodeId: node, stop: true }
-        : { kind: 'container', id: row.id, source: row.source, target: row.target, newName, nodeId: row.nodeId, stop: true };
+        ? { kind: 'service', id: row.id, source: row.source, target: row.target, newName, nodeId: node, stop: true, force }
+        : { kind: 'container', id: row.id, source: row.source, target: row.target, newName, nodeId: row.nodeId, stop: true, force };
       await postSSE('/migrate', body, (e) => {
         if (e.type === 'phase') setProg((p) => ({ ...(p || {}), phase: e.phase }));
         else if (e.type === 'size') setProg((p) => ({ ...(p || {}), total: e.total || null }));
@@ -377,7 +398,7 @@ function MigrationModal({ row, onClose, onDone }) {
     <Modal title={`Migrieren · ${row.name}`} onClose={busy ? () => {} : onClose}
       footer={<>
         <button className="btn" disabled={busy} onClick={onClose}>Abbrechen</button>
-        <button className="btn primary" disabled={busy || !chk || !newName || (row.kind === 'service' && !node)} onClick={run}>Migration starten</button>
+        <button className="btn primary" disabled={startDisabled} onClick={run}>Migration starten</button>
       </>}>
       <div className="help" style={{ marginBottom: 8 }}>
         {row.kind === 'service' ? 'Service' : 'Container'} <b>{row.name}</b> · Bind <span className="mono">{row.source}</span> → <span className="mono">{row.target}</span>
@@ -407,6 +428,45 @@ function MigrationModal({ row, onClose, onDone }) {
           </div>
         </div>
       )}
+      {/* Disk pre-check */}
+      {!prog && (
+        <div style={{ margin: '10px 0', padding: 10, borderRadius: 6, background: 'var(--bg-elev2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: pre && pre.verdict !== 'error' ? 6 : 0 }}>
+            <b style={{ fontSize: 13 }}>Speicher-Vorabprüfung</b>
+            {preBusy && <span className="help">prüfe…</span>}
+            {!preBusy && pre?.verdict === 'ok' && <Badge kind="ok">genügend Platz</Badge>}
+            {!preBusy && pre?.verdict === 'tight' && <Badge kind="warn">knapp</Badge>}
+            {!preBusy && pre?.verdict === 'insufficient' && <Badge kind="err">zu wenig Platz</Badge>}
+            {!preBusy && pre?.verdict === 'unknown' && <Badge kind="muted">unbestimmt</Badge>}
+            {!preBusy && pre?.verdict === 'error' && <Badge kind="err">Prüfung fehlgeschlagen</Badge>}
+          </div>
+          {pre && pre.verdict !== 'error' && (
+            <div className="help" style={{ fontSize: 12, lineHeight: 1.6 }}>
+              Ziel-Node: <span className="mono">{pre.dataNode?.hostname || '—'}</span>{pre.dataNode?.isManager ? ' (Manager)' : ''}<br />
+              Daten: <b>{bytes(pre.sizeBytes || 0)}</b> · frei: <b>{bytes(pre.freeBytes || 0)}</b>
+              {pre.totalBytes ? ` von ${bytes(pre.totalBytes)}` : ''} · benötigt inkl. Reserve: ~{bytes(pre.neededBytes || 0)}
+            </div>
+          )}
+          {pre?.verdict === 'error' && <div className="help" style={{ fontSize: 12 }}>{pre.error}</div>}
+          {pre?.verdict === 'tight' && (
+            <div className="help" style={{ fontSize: 12, marginTop: 4, color: 'var(--warn, #d29922)' }}>
+              Die Daten passen, aber ohne Sicherheitsreserve. Migration möglich, jedoch mit Vorsicht.
+            </div>
+          )}
+          {insufficient && (
+            <div style={{ marginTop: 6 }}>
+              <div className="banner" style={{ marginBottom: 6 }}>
+                Der Ziel-Node hat weniger freien Speicher als für eine zweite Kopie der Daten nötig — die Migration würde voraussichtlich scheitern.
+              </div>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={force} onChange={(e) => setForce(e.target.checked)} disabled={busy} />
+                Warnung ignorieren und trotzdem migrieren (auf eigene Verantwortung)
+              </label>
+            </div>
+          )}
+        </div>
+      )}
+
       {!prog && (
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', marginTop: 4 }}>
           <input type="checkbox" style={{ width: 'auto' }} checked={chk} onChange={(e) => setChk(e.target.checked)} disabled={busy} />

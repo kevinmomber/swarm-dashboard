@@ -9,6 +9,7 @@ import { listAgents, agentBaseForNode } from './metrics.js';
 import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
+import { authConfigFor } from './registryauth.js';
 
 const SWARM_SVC_LABEL = 'com.docker.swarm.service.id';
 
@@ -1105,6 +1106,64 @@ export async function imagePrune(nodeId, all) {
   }
   const res = await docker.pruneImages({ filters: all ? {} : { dangling: { true: true } } });
   return { ok: true, reclaimed: res.SpaceReclaimed || 0, deleted: (res.ImagesDeleted || []).length };
+}
+
+/** Pull an image locally with optional registry auth; reports layer status lines. */
+function pullLocal(ref, authconfig, onStatus) {
+  return new Promise((resolve, reject) => {
+    docker.pull(ref, authconfig ? { authconfig } : {}, (err, stream) => {
+      if (err) return reject(err);
+      docker.modem.followProgress(
+        stream,
+        (doneErr, output) => (doneErr ? reject(doneErr) : resolve(output)),
+        (ev) => { if (ev && ev.status) onStatus?.(ev.progress ? `${ev.status} ${ev.progress}` : ev.status); },
+      );
+    });
+  });
+}
+
+/**
+ * Pull an image from a (registered) registry onto one or more nodes. Credentials
+ * for the matching registry are resolved on the manager (authConfigFor) and,
+ * for remote nodes, passed to the agent (which has no settings of its own).
+ * Reports progress via onEvent: {type:'node',phase:start|done|error} and
+ * {type:'progress',status} for the local node's layer lines.
+ */
+export async function imagePull({ ref, nodeIds, onEvent }) {
+  await requireManager();
+  if (!ref || !/^[\w./:@-]+$/.test(ref)) throw new Error('Ungültige Image-Referenz');
+  const info = await docker.info();
+  const localId = info.Swarm?.NodeID || null;
+  const authconfig = await authConfigFor(ref); // null when no matching registry/creds
+  const nodes = await docker.listNodes().catch(() => []);
+  const hostById = new Map(nodes.map((n) => [n.ID, n.Description?.Hostname || n.ID]));
+  const targets = (Array.isArray(nodeIds) && nodeIds.length) ? nodeIds : [localId];
+
+  const results = [];
+  for (const nid of targets) {
+    const hostname = hostById.get(nid) || nid || 'local';
+    onEvent?.({ type: 'node', nodeId: nid, hostname, phase: 'start' });
+    try {
+      const local = !nid || nid === localId;
+      if (local) {
+        await pullLocal(ref, authconfig, (status) => onEvent?.({ type: 'progress', nodeId: nid, hostname, status }));
+      } else {
+        const base = await agentBaseForNode(nid);
+        if (!base) throw new Error('Node nicht erreichbar (Agent erforderlich)');
+        const r = await fetchWithTimeout(`${base}/image-pull`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ref, authconfig }),
+        }, 3600 * 1000);
+        if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `HTTP ${r.status}`); }
+      }
+      onEvent?.({ type: 'node', nodeId: nid, hostname, phase: 'done' });
+      results.push({ nodeId: nid, hostname, ok: true });
+    } catch (e) {
+      onEvent?.({ type: 'node', nodeId: nid, hostname, phase: 'error', error: e.message });
+      results.push({ nodeId: nid, hostname, ok: false, error: e.message });
+    }
+  }
+  return { ok: results.every((r) => r.ok), ref, results };
 }
 
 export async function imageExport(nodeId, ref, res) {

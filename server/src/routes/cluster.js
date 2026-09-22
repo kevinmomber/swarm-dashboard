@@ -16,6 +16,7 @@ import {
   imageImport,
   imageImportMulti,
   imageUsage,
+  imagePull,
 } from '../cluster.js';
 
 const router = Router();
@@ -129,6 +130,23 @@ router.post('/images/import-multi', async (req, res, next) => {
     const ids = String(req.query.nodeIds || '').split(',').map((s) => s.trim()).filter(Boolean);
     await imageImportMulti(ids, req, res);
   } catch (err) { next(err); }
+});
+
+// Pull an image from a registered registry onto one or more nodes (SSE progress).
+router.post('/images/pull', async (req, res) => {
+  const { ref, nodeIds } = req.body || {};
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (res.flushHeaders) res.flushHeaders();
+  const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+  try {
+    const result = await imagePull({ ref, nodeIds, onEvent: (e) => send(e) });
+    send({ type: 'done', result });
+  } catch (e) {
+    send({ type: 'error', message: e.message });
+  }
+  res.end();
 });
 
 export default router;

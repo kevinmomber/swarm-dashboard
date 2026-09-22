@@ -4,6 +4,7 @@ import { useApi } from '../components/useApi.js';
 import { Badge, Modal, bytes, ago, short, useToast } from '../components/ui.jsx';
 import TabBar from '../components/TabBar.jsx';
 import BuilderPanel from '../components/BuilderPanel.jsx';
+import ImagePullPanel from '../components/ImagePullPanel.jsx';
 
 function download(path) {
   const a = document.createElement('a');
@@ -351,11 +352,12 @@ export default function Images() {
         <div><h1>Images</h1><div className="sub">Image-Bibliothek und integrierter Builder (CI/CD)</div></div>
       </div>
       <TabBar
-        tabs={[{ k: 'library', label: 'Library' }, { k: 'builder', label: 'Builder' }]}
+        tabs={[{ k: 'library', label: 'Library' }, { k: 'pull', label: 'Pull (Registry)' }, { k: 'builder', label: 'Builder' }]}
         active={tab}
         onChange={setTab}
       />
       {tab === 'library' && <Library />}
+      {tab === 'pull' && <ImagePullPanel />}
       {tab === 'builder' && <BuilderPanel />}
     </>
   );

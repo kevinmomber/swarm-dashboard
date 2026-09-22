@@ -384,6 +384,17 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/image-import' && req.method === 'POST') {
       return imageImport(req, res);
     }
+    if (u.pathname === '/image-pull' && req.method === 'POST') {
+      const { ref, authconfig } = await readJson(req);
+      if (!ref) { res.statusCode = 400; return json({ error: 'ref fehlt' }); }
+      await new Promise((resolve, reject) => {
+        docker.pull(ref, authconfig ? { authconfig } : {}, (err, stream) => {
+          if (err) return reject(err);
+          docker.modem.followProgress(stream, (e, o) => (e ? reject(e) : resolve(o)));
+        });
+      });
+      return json({ ok: true });
+    }
     if (u.pathname === '/export') {
       const id = u.searchParams.get('container');
       const name = u.searchParams.get('name') || 'service';

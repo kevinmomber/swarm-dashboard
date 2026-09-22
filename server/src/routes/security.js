@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { securityTargets, scanImage } from '../cluster.js';
 import { putResult, getResult, allResults, clearResults, scorecard } from '../securitystore.js';
+import { runBestPractices } from '../bestpractices.js';
 
 const router = Router();
 
@@ -65,6 +66,13 @@ router.post('/scan', async (req, res) => {
     send({ type: 'error', message: e.message });
   }
   res.end();
+});
+
+// Best-practice scan of the swarm manager (read-only; infra + security rules).
+router.get('/best-practices', async (req, res, next) => {
+  try {
+    res.json(await runBestPractices());
+  } catch (err) { next(err); }
 });
 
 export default router;

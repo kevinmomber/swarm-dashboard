@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { api, postSSE } from '../api.js';
 import { useApi } from '../components/useApi.js';
 import { Badge, Modal, bytes, ago, useToast } from '../components/ui.jsx';
@@ -257,19 +257,121 @@ function Vulnerability() {
   );
 }
 
+function BestPractices() {
+  const toast = useToast();
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState('all'); // all | infra | security | issues
+  const [err, setErr] = useState(null);
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try { setData(await api.get('/security/best-practices')); }
+    catch (e) { setErr(e.message); toast(e.message, 'err'); } finally { setBusy(false); }
+  };
+  // auto-run on first mount
+  useEffect(() => { run(); }, []);
+
+  const sevBadge = (sev) => {
+    const map = { high: 'err', medium: 'warn', low: 'info', info: 'muted' };
+    const lbl = { high: 'Hoch', medium: 'Mittel', low: 'Niedrig', info: 'Info' };
+    return <Badge kind={map[sev] || 'muted'}>{lbl[sev] || sev}</Badge>;
+  };
+  const statusBadge = (st) => {
+    if (st === 'pass') return <Badge kind="ok">OK</Badge>;
+    if (st === 'warn') return <Badge kind="warn">Warnung</Badge>;
+    if (st === 'fail') return <Badge kind="err">Fehler</Badge>;
+    return <Badge kind="muted">n/a</Badge>;
+  };
+
+  const checks = data?.checks || [];
+  const shown = checks.filter((c) => {
+    if (filter === 'all') return true;
+    if (filter === 'issues') return c.status === 'warn' || c.status === 'fail';
+    return c.category === filter;
+  });
+  const s = data?.summary;
+
+  return (
+    <>
+      <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+        <div className="sub">Read-only Best-Practice-Prüfung des Swarm-Managers (Infrastruktur & Security)</div>
+        <button className="btn" disabled={busy} onClick={run}>{busy ? 'Prüfe…' : '↻ Neu prüfen'}</button>
+      </div>
+
+      {err && <div className="banner">{err}</div>}
+      {!data && !err && <div className="spinner">Prüfe…</div>}
+
+      {s && (
+        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 14, flexWrap: 'wrap' }}>
+          <GradeBadge grade={s.grade} size={56} />
+          <div>
+            <div style={{ fontSize: 26, fontWeight: 800 }}>{s.score}%</div>
+            <div className="help">{s.pass} OK · {s.warn} Warnungen · {s.fail} Fehler · {s.na} n/a</div>
+          </div>
+          {s.critical > 0 && <Badge kind="err">{s.critical} kritisch</Badge>}
+          <div style={{ flex: 1 }} />
+          <div className="pill-group">
+            {['all', 'infra', 'security', 'issues'].map((f) => (
+              <button key={f} className={`btn sm ${filter === f ? 'primary' : ''}`} onClick={() => setFilter(f)}>
+                {{ all: 'Alle', infra: 'Infrastruktur', security: 'Security', issues: 'Nur Findings' }[f]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data && (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Status</th><th>Prüfung</th><th>Schwere</th><th>Details</th></tr></thead>
+            <tbody>
+              {shown.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{statusBadge(c.status)}</td>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{c.title}</div>
+                    <div className="help" style={{ fontSize: 11 }}>
+                      <span className="mono">{c.id}</span> · {c.category === 'infra' ? 'Infrastruktur' : 'Security'}
+                    </div>
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{sevBadge(c.severity)}</td>
+                  <td style={{ fontSize: 12 }}>
+                    <div>{c.detail}</div>
+                    {c.objects?.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, margin: '4px 0' }}>
+                        {c.objects.slice(0, 8).map((o) => <Badge key={o} kind="muted">{o}</Badge>)}
+                        {c.objects.length > 8 && <span className="help">+{c.objects.length - 8}</span>}
+                      </div>
+                    )}
+                    {(c.status === 'warn' || c.status === 'fail') && (
+                      <div className="help" style={{ marginTop: 2, color: 'var(--text-dim)' }}>💡 {c.remediation}</div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function Security() {
   const [tab, setTab] = useState('vuln');
   return (
     <>
       <div className="page-head">
-        <div><h1>Security</h1><div className="sub">CVE-Scans & interne Zertifikatsverwaltung (PKI)</div></div>
+        <div><h1>Security</h1><div className="sub">CVE-Scans, Best Practices & interne Zertifikatsverwaltung (PKI)</div></div>
       </div>
       <TabBar
-        tabs={[{ k: 'vuln', label: 'Vulnerability' }, { k: 'pki', label: 'PKI' }]}
+        tabs={[{ k: 'vuln', label: 'Vulnerability' }, { k: 'bestpractices', label: 'Best Practices' }, { k: 'pki', label: 'PKI' }]}
         active={tab}
         onChange={setTab}
       />
       {tab === 'vuln' && <Vulnerability />}
+      {tab === 'bestpractices' && <BestPractices />}
       {tab === 'pki' && <PkiPanel />}
     </>
   );

@@ -33,6 +33,7 @@ import { auditMiddleware } from './audit.js';
 import { applySchedule } from './backup.js';
 import { applyMonitoring } from './monitoring.js';
 import { startMetricsSampler } from './metricshistory.js';
+import { applyBestPracticeSchedule } from './bpstore.js';
 import { applyGitopsSchedule } from './gitops.js';
 import { renderMetrics } from './prometheus.js';
 import { resolveRunningContainer } from './serviceops.js';
@@ -307,4 +308,5 @@ server.listen(PORT, () => {
   applyMonitoring().catch((e) => console.error('Monitoring-Init fehlgeschlagen:', e.message));
   try { startMetricsSampler(); } catch (e) { console.error('Metrik-Sampler-Init fehlgeschlagen:', e.message); }
   try { applyGitopsSchedule(); } catch (e) { console.error('GitOps-Scheduler-Init fehlgeschlagen:', e.message); }
+  applyBestPracticeSchedule().catch((e) => console.error('Best-Practice-Scheduler-Init fehlgeschlagen:', e.message));
 });

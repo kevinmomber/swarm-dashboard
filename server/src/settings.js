@@ -95,6 +95,13 @@ const DEFAULTS = {
       email: { enabled: false, host: '', port: 587, secure: false, user: '', pass: '', from: '', to: '' },
     },
   },
+  bestPractices: {
+    // Best-Practice-Scanner Phase 3: Zeitplan + Alert-Integration.
+    enabled: false, // periodischen Scan aktivieren
+    intervalHours: 24, // Abstand zwischen Läufen
+    alertOnNewCritical: true, // Alert bei neuen kritischen Findings (fail + high/medium)
+    alertOnGradeDrop: false, // Alert wenn sich die Gesamtnote verschlechtert
+  },
   history: [], // [{ id, jobId, jobName, startedAt, finishedAt, status, volumes:[...], error }]
   monitorLog: [], // [{ at, level, target, message }]
   registries: [], // [{ id, name, url, username, password }]

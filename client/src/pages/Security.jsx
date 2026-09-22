@@ -257,20 +257,65 @@ function Vulnerability() {
   );
 }
 
+function Sparkline({ points, width = 260, height = 40 }) {
+  if (!points || points.length < 2) return <span className="help">Noch keine Verlaufsdaten</span>;
+  const xs = points.map((_, i) => i);
+  const maxX = xs[xs.length - 1] || 1;
+  const path = points.map((p, i) => {
+    const x = (i / maxX) * (width - 4) + 2;
+    const y = height - 2 - ((p.score ?? 0) / 100) * (height - 4);
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const last = points[points.length - 1];
+  const col = last.score >= 80 ? 'var(--ok,#3fb950)' : last.score >= 50 ? 'var(--warn,#d29922)' : 'var(--err,#f85149)';
+  return (
+    <svg width={width} height={height} style={{ overflow: 'visible' }}>
+      <line x1="2" y1={height - 2 - 0.8 * (height - 4)} x2={width - 2} y2={height - 2 - 0.8 * (height - 4)} stroke="var(--border,#30363d)" strokeDasharray="3 3" />
+      <path d={path} fill="none" stroke={col} strokeWidth="2" />
+      {points.map((p, i) => {
+        const x = (i / maxX) * (width - 4) + 2;
+        const y = height - 2 - ((p.score ?? 0) / 100) * (height - 4);
+        return <circle key={i} cx={x} cy={y} r="1.6" fill={col}><title>{`${new Date(p.t).toLocaleString()}: ${p.score}% (${p.grade})`}</title></circle>;
+      })}
+    </svg>
+  );
+}
+
 function BestPractices() {
   const toast = useToast();
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState('all'); // all | infra | security | issues
+  const [filter, setFilter] = useState('all'); // all | infra | security | host | issues
   const [err, setErr] = useState(null);
+  const [hist, setHist] = useState(null);
+  const [sched, setSched] = useState(null);
+  const [savingSched, setSavingSched] = useState(false);
 
-  const run = async () => {
+  const loadHist = async () => { try { setHist(await api.get('/security/best-practices/history?days=30')); } catch { /* noop */ } };
+  const loadSched = async () => { try { setSched(await api.get('/security/best-practices/schedule')); } catch { /* noop */ } };
+
+  // Display-only load (no history entry) on first mount.
+  const load = async () => {
     setBusy(true); setErr(null);
     try { setData(await api.get('/security/best-practices')); }
     catch (e) { setErr(e.message); toast(e.message, 'err'); } finally { setBusy(false); }
   };
-  // auto-run on first mount
-  useEffect(() => { run(); }, []);
+  // Manual re-check that records into the score history.
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try { setData(await api.post('/security/best-practices/run')); await loadHist(); }
+    catch (e) { setErr(e.message); toast(e.message, 'err'); } finally { setBusy(false); }
+  };
+  useEffect(() => { load(); loadHist(); loadSched(); }, []);
+
+  const saveSched = async (patch) => {
+    setSavingSched(true);
+    try {
+      const cfg = { ...(sched?.config || {}), ...patch };
+      setSched(await api.post('/security/best-practices/schedule', cfg));
+      toast('Zeitplan gespeichert', 'ok');
+    } catch (e) { toast(e.message, 'err'); } finally { setSavingSched(false); }
+  };
 
   const sevBadge = (sev) => {
     const map = { high: 'err', medium: 'warn', low: 'info', info: 'muted' };
@@ -320,6 +365,49 @@ function BestPractices() {
           </div>
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>Score-Verlauf (30 Tage)</div>
+            <Sparkline points={hist?.points || []} />
+            {hist?.points?.length > 0 && (
+              <div className="help" style={{ fontSize: 11 }}>
+                {hist.points.length} Läufe · zuletzt {hist.points[hist.points.length - 1].score}% ({hist.points[hist.points.length - 1].grade})
+              </div>
+            )}
+          </div>
+          <div style={{ flex: 1 }} />
+          {sched && (
+            <div style={{ minWidth: 260 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                Zeitplan {sched.status?.running ? <Badge kind="ok">aktiv</Badge> : <Badge kind="muted">aus</Badge>}
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <input type="checkbox" checked={Boolean(sched.config?.enabled)} disabled={savingSched}
+                  onChange={(e) => saveSched({ enabled: e.target.checked })} />
+                <span>Automatisch prüfen alle</span>
+                <input type="number" min="1" max="168" value={sched.config?.intervalHours ?? 24} disabled={savingSched}
+                  style={{ width: 64 }}
+                  onChange={(e) => setSched({ ...sched, config: { ...sched.config, intervalHours: Number(e.target.value) } })}
+                  onBlur={(e) => saveSched({ intervalHours: Number(e.target.value) })} />
+                <span>Std.</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <input type="checkbox" checked={sched.config?.alertOnNewCritical !== false} disabled={savingSched}
+                  onChange={(e) => saveSched({ alertOnNewCritical: e.target.checked })} />
+                <span>Alert bei neuen kritischen Findings</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={Boolean(sched.config?.alertOnGradeDrop)} disabled={savingSched}
+                  onChange={(e) => saveSched({ alertOnGradeDrop: e.target.checked })} />
+                <span>Alert bei Noten-Verschlechterung</span>
+              </label>
+              <div className="help" style={{ fontSize: 11, marginTop: 4 }}>Alerts nutzen die Monitoring-Kanäle (Einstellungen → Monitoring).</div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {data && (
         <div className="table-wrap">

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { securityTargets, scanImage } from '../cluster.js';
 import { putResult, getResult, allResults, clearResults, scorecard } from '../securitystore.js';
 import { runBestPractices } from '../bestpractices.js';
+import { history as bpHistory, runNow as bpRunNow, applyBestPracticeSchedule, scheduleStatus } from '../bpstore.js';
+import { loadSettings, saveSettings } from '../settings.js';
 
 const router = Router();
 
@@ -72,6 +74,47 @@ router.post('/scan', async (req, res) => {
 router.get('/best-practices', async (req, res, next) => {
   try {
     res.json(await runBestPractices());
+  } catch (err) { next(err); }
+});
+
+// Manual run that also records the result into the score history.
+router.post('/best-practices/run', async (req, res, next) => {
+  try {
+    res.json(await bpRunNow());
+  } catch (err) { next(err); }
+});
+
+// Score history (time-series of recorded runs).
+router.get('/best-practices/history', async (req, res, next) => {
+  try {
+    const days = Math.max(1, Math.min(180, Number(req.query.days) || 30));
+    res.json(bpHistory({ days }));
+  } catch (err) { next(err); }
+});
+
+// Schedule config + status.
+router.get('/best-practices/schedule', async (req, res, next) => {
+  try {
+    const settings = await loadSettings();
+    res.json({ config: settings.bestPractices, status: scheduleStatus() });
+  } catch (err) { next(err); }
+});
+
+router.post('/best-practices/schedule', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const settings = await loadSettings();
+    const cur = settings.bestPractices || {};
+    settings.bestPractices = {
+      ...cur,
+      enabled: body.enabled != null ? Boolean(body.enabled) : cur.enabled,
+      intervalHours: body.intervalHours != null ? Math.max(1, Math.min(168, Number(body.intervalHours) || 24)) : cur.intervalHours,
+      alertOnNewCritical: body.alertOnNewCritical != null ? Boolean(body.alertOnNewCritical) : cur.alertOnNewCritical,
+      alertOnGradeDrop: body.alertOnGradeDrop != null ? Boolean(body.alertOnGradeDrop) : cur.alertOnGradeDrop,
+    };
+    await saveSettings(settings);
+    const status = await applyBestPracticeSchedule();
+    res.json({ config: settings.bestPractices, status });
   } catch (err) { next(err); }
 });
 

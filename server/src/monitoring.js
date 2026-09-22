@@ -212,6 +212,11 @@ export async function getStatus() {
   };
 }
 
+/** Wiederverwendbare Alert-Zustellung für andere Module (z. B. Best-Practice-Scheduler). */
+export async function dispatchAlert(level, target, message) {
+  return dispatch(level, target, message);
+}
+
 export async function testAlert() {
   await requireManager().catch(() => {});
   await dispatch('test', 'monitoring', 'Test-Benachrichtigung vom Swarm Dashboard');

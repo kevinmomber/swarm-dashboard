@@ -19,7 +19,7 @@
  */
 import http from 'node:http';
 import os from 'node:os';
-import { readFile, statfs } from 'node:fs/promises';
+import { readFile, statfs, stat, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import Docker from 'dockerode';
 import { WebSocketServer } from 'ws';
@@ -76,6 +76,66 @@ async function collect() {
     cpu: { load1, cpus, loadPct: cpus ? Math.min(100, Math.round((load1 / cpus) * 100)) : null },
     mem,
     disk,
+  };
+}
+
+/* --------------------------- host audit ---------------------------- */
+
+/** Stat a host path (via HOST_ROOT); returns perms/owner or {exists:false}. */
+async function hostStat(rel) {
+  try {
+    const s = await stat(`${HOST_ROOT}${rel}`);
+    return { path: rel, exists: true, mode: s.mode & 0o777, uid: s.uid, gid: s.gid, isDir: s.isDirectory() };
+  } catch {
+    return { path: rel, exists: false };
+  }
+}
+
+/** Read + parse /etc/docker/daemon.json from the host (or null). */
+async function hostDaemonJson() {
+  try { return JSON.parse(await readFile(`${HOST_ROOT}/etc/docker/daemon.json`, 'utf8')); }
+  catch { return null; }
+}
+
+/** Scan auditd rules for docker-relevant paths (CIS 1.1.x). */
+async function hostAuditRules() {
+  const wanted = ['/usr/bin/dockerd', '/var/lib/docker', '/etc/docker', 'docker.service', 'docker.socket', '/etc/docker/daemon.json', '/etc/default/docker'];
+  let text = '';
+  try { text += await readFile(`${HOST_ROOT}/etc/audit/audit.rules`, 'utf8'); } catch { /* ignore */ }
+  try {
+    const dir = `${HOST_ROOT}/etc/audit/rules.d`;
+    for (const f of await readdir(dir)) {
+      if (f.endsWith('.rules')) { try { text += '\n' + await readFile(`${dir}/${f}`, 'utf8'); } catch { /* ignore */ } }
+    }
+  } catch { /* auditd not installed */ }
+  const covered = wanted.filter((w) => text.includes(w));
+  return { present: text.trim().length > 0, covered, wanted };
+}
+
+async function hostAudit() {
+  const [daemonJson, etcDocker, daemonFile, sockRun, sockVarRun, auditRules, info] = await Promise.all([
+    hostDaemonJson(),
+    hostStat('/etc/docker'),
+    hostStat('/etc/docker/daemon.json'),
+    hostStat('/run/docker.sock'),
+    hostStat('/var/run/docker.sock'),
+    hostAuditRules(),
+    docker.info().catch(() => ({})),
+  ]);
+  const sock = sockRun.exists ? sockRun : sockVarRun;
+  return {
+    nodeId: NODE_ID,
+    hostname: NODE_HOSTNAME,
+    daemonJson,
+    files: { etcDocker, daemonFile, sock },
+    auditRules,
+    info: {
+      LiveRestoreEnabled: info.LiveRestoreEnabled ?? null,
+      ServerVersion: info.ServerVersion || null,
+      SecurityOptions: info.SecurityOptions || [],
+      LoggingDriver: info.LoggingDriver || null,
+      CgroupDriver: info.CgroupDriver || null,
+    },
   };
 }
 
@@ -235,6 +295,7 @@ const server = http.createServer(async (req, res) => {
 
     if (u.pathname === '/health') return json({ ok: true, nodeId: NODE_ID, hostname: NODE_HOSTNAME, version: AGENT_VERSION });
     if (u.pathname === '/metrics') return json(await collect());
+    if (u.pathname === '/host-audit') return json(await hostAudit());
     if (u.pathname === '/containers') return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, containers: await listLocalContainers() });
     if (u.pathname === '/images') return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, images: await listLocalImages() });
     if (u.pathname === '/volumes') return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, volumes: await listLocalVolumes() });

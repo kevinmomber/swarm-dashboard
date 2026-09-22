@@ -312,9 +312,9 @@ function BestPractices() {
           {s.critical > 0 && <Badge kind="err">{s.critical} kritisch</Badge>}
           <div style={{ flex: 1 }} />
           <div className="pill-group">
-            {['all', 'infra', 'security', 'issues'].map((f) => (
+            {['all', 'infra', 'security', 'host', 'issues'].map((f) => (
               <button key={f} className={`btn sm ${filter === f ? 'primary' : ''}`} onClick={() => setFilter(f)}>
-                {{ all: 'Alle', infra: 'Infrastruktur', security: 'Security', issues: 'Nur Findings' }[f]}
+                {{ all: 'Alle', infra: 'Infrastruktur', security: 'Security', host: 'Host/Daemon', issues: 'Nur Findings' }[f]}
               </button>
             ))}
           </div>
@@ -332,7 +332,7 @@ function BestPractices() {
                   <td>
                     <div style={{ fontWeight: 600 }}>{c.title}</div>
                     <div className="help" style={{ fontSize: 11 }}>
-                      <span className="mono">{c.id}</span> · {c.category === 'infra' ? 'Infrastruktur' : 'Security'}
+                      <span className="mono">{c.id}</span> · {{ infra: 'Infrastruktur', security: 'Security', host: 'Host/Daemon' }[c.category] || c.category}
                     </div>
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>{sevBadge(c.severity)}</td>

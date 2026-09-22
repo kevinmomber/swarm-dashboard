@@ -87,7 +87,9 @@ export async function connectedNodeStats() {
 let agentCache = { at: 0, data: null };
 const AGENT_TTL = 12_000;
 
-/** Resolve all agent task IPs via Docker DNS (dnsrr service + tasks. record). */
+/** Resolve all agent task IPs via Docker DNS (dnsrr service + tasks. record),
+ *  with a robust Docker-API fallback (task network attachments) when DNS aliases
+ *  don't resolve — e.g. when the deployed agent uses a different network alias. */
 async function agentIps() {
   const names = [AGENT_SERVICE, `tasks.${AGENT_SERVICE}`];
   const ips = new Set();
@@ -96,6 +98,31 @@ async function agentIps() {
       for (const ip of await dns.resolve4(name)) ips.add(ip);
     } catch {
       /* not resolvable (no agent / not in swarm DNS) */
+    }
+  }
+  if (ips.size === 0) {
+    // Fallback: find the global agent service and read its running tasks' IPs.
+    try {
+      const services = await docker.listServices();
+      const agentSvc = services.find((s) => {
+        const cmd = (s.Spec?.TaskTemplate?.ContainerSpec?.Command || []).join(' ');
+        return /agent\.js/.test(cmd) || /(^|_)agent$/.test(s.Spec?.Name || '');
+      });
+      if (agentSvc) {
+        const tasks = await docker.listTasks({ filters: { service: [agentSvc.Spec.Name] } });
+        for (const t of tasks) {
+          if (t.Status?.State !== 'running') continue;
+          for (const na of (t.NetworksAttachments || [])) {
+            if ((na.Network?.Spec?.Name || na.Network?.Spec?.Ingress) === 'ingress' || na.Network?.Spec?.Ingress) continue;
+            for (const addr of (na.Addresses || [])) {
+              const ip = String(addr).split('/')[0];
+              if (ip) ips.add(ip);
+            }
+          }
+        }
+      }
+    } catch {
+      /* API fallback failed */
     }
   }
   return [...ips];

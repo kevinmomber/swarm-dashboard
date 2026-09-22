@@ -11,6 +11,14 @@
  * checks that need per-node host access are a later phase (via the agent).
  */
 import { docker, requireManager } from './docker.js';
+import { agentBaseForNode } from './metrics.js';
+
+async function fetchWithTimeout(url, ms = 8000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { signal: ctrl.signal }); }
+  finally { clearTimeout(timer); }
+}
 
 const SYSTEM_STACKS = new Set(['swarm-dashboard', 'swarmdash-proxy', 'swarmdash-tailscale']);
 const SYSTEM_NAME_RE = /^(swarm-dashboard|swarmdash)/;
@@ -246,6 +254,13 @@ export async function runBestPractices() {
     'Nur TLS-gesicherte Registries verwenden; „insecure-registries" im daemon.json vermeiden (MITM-Risiko beim Pull/Push).',
     insecure));
 
+  // Phase 2: node-local host/daemon checks (via agents). Best-effort — never
+  // breaks the manager-level scan if agents are unreachable.
+  try {
+    const hostChecks = await runHostChecks(nodes);
+    for (const c of hostChecks) checks.push(c);
+  } catch { /* host checks unavailable */ }
+
   /* --------------------------- summary --------------------------- */
   const applicable = checks.filter((c) => c.status !== 'na');
   const pass = applicable.filter((c) => c.status === 'pass').length;
@@ -262,3 +277,146 @@ export async function runBestPractices() {
     checks,
   };
 }
+
+/* ==================== Phase 2: host/daemon checks ==================== */
+
+/** Aggregate a per-node predicate into one check. evalFn(audit) -> {status,reason?}. */
+function perNode(audits, id, title, severity, remediation, evalFn) {
+  const results = audits.map((a) => ({ hostname: a.hostname, ...evalFn(a) }));
+  const applicable = results.filter((r) => r.status !== 'na');
+  const status = applicable.length === 0 ? 'na'
+    : applicable.some((r) => r.status === 'fail') ? 'fail'
+      : applicable.some((r) => r.status === 'warn') ? 'warn' : 'pass';
+  const objects = results.filter((r) => r.status === 'warn' || r.status === 'fail')
+    .map((r) => `${r.hostname}${r.reason ? `: ${r.reason}` : ''}`);
+  const okN = applicable.filter((r) => r.status === 'pass').length;
+  const detail = applicable.length === 0 ? 'Keine Node-Daten (Agent nicht erreichbar).' : `${okN}/${applicable.length} Node(s) ok.`;
+  return { id, category: 'host', title, severity, status, detail, remediation, objects };
+}
+
+const octal = (m) => (m == null ? '?' : '0' + m.toString(8));
+
+async function runHostChecks(nodes) {
+  const ready = (nodes || []).filter((n) => n.Status?.State === 'ready');
+  const audits = [];
+  const unreachable = [];
+  await Promise.all(ready.map(async (n) => {
+    const host = n.Description?.Hostname;
+    try {
+      const base = await agentBaseForNode(n.ID, host);
+      if (!base) { unreachable.push(host || n.ID); return; }
+      const r = await fetchWithTimeout(`${base}/host-audit`, 8000);
+      if (!r.ok) { unreachable.push(host || n.ID); return; }
+      audits.push(await r.json());
+    } catch { unreachable.push(host || n.ID); }
+  }));
+
+  const checks = [];
+
+  // HOST-01: daemon.json permissions/owner (CIS 3.17/3.18)
+  checks.push(perNode(audits, 'HOST-01', 'daemon.json Rechte & Eigentümer', 'medium',
+    'daemon.json sollte root:root gehören und maximal 0644 haben (keine Schreibrechte für Gruppe/Andere).',
+    (a) => {
+      const f = a.files?.daemonFile;
+      if (!f || !f.exists) return { status: 'na' };
+      const ok = f.uid === 0 && f.gid === 0 && (f.mode & 0o022) === 0;
+      return ok ? { status: 'pass' } : { status: 'fail', reason: `${octal(f.mode)} uid=${f.uid} gid=${f.gid}` };
+    }));
+
+  // HOST-02: /etc/docker directory permissions/owner (CIS 3.15/3.16)
+  checks.push(perNode(audits, 'HOST-02', '/etc/docker Verzeichnis-Rechte', 'low',
+    '/etc/docker sollte root:root gehören und maximal 0755 haben.',
+    (a) => {
+      const f = a.files?.etcDocker;
+      if (!f || !f.exists) return { status: 'na' };
+      const ok = f.uid === 0 && (f.mode & 0o022) === 0;
+      return ok ? { status: 'pass' } : { status: 'warn', reason: `${octal(f.mode)} uid=${f.uid}` };
+    }));
+
+  // HOST-03: docker.sock permissions/owner (CIS 3.15/3.16)
+  checks.push(perNode(audits, 'HOST-03', 'docker.sock Rechte & Eigentümer', 'high',
+    'Der Docker-Socket sollte root:docker gehören und maximal 0660 haben; keine Rechte für „andere".',
+    (a) => {
+      const f = a.files?.sock;
+      if (!f || !f.exists) return { status: 'na' };
+      if (f.uid !== 0) return { status: 'fail', reason: `uid=${f.uid}` };
+      if ((f.mode & 0o007) !== 0) return { status: 'fail', reason: `${octal(f.mode)} (Andere haben Zugriff)` };
+      if ((f.mode & 0o777) > 0o660) return { status: 'warn', reason: octal(f.mode) };
+      return { status: 'pass' };
+    }));
+
+  // HOST-04: auditd rules for docker (CIS 1.1.x)
+  checks.push(perNode(audits, 'HOST-04', 'auditd-Regeln für Docker', 'low',
+    'auditd-Regeln für dockerd, /var/lib/docker, /etc/docker, docker.service/.socket und daemon.json einrichten (Forensik/Nachvollziehbarkeit).',
+    (a) => {
+      const ar = a.auditRules;
+      if (!ar) return { status: 'na' };
+      if (!ar.present) return { status: 'warn', reason: 'keine auditd-Regeln' };
+      const core = ['/usr/bin/dockerd', '/var/lib/docker', '/etc/docker'];
+      const missing = core.filter((c) => !ar.covered.includes(c));
+      if (missing.length === 0) return { status: 'pass' };
+      return { status: 'warn', reason: `unvollständig (fehlt: ${missing.join(', ')})` };
+    }));
+
+  // HOST-05: userns-remap (CIS 2.8)
+  checks.push(perNode(audits, 'HOST-05', 'User-Namespace-Remapping', 'low',
+    'userns-remap aktivieren (daemon.json "userns-remap"), damit Container-root nicht Host-root ist.',
+    (a) => {
+      const dj = a.daemonJson || {};
+      const secUserns = (a.info?.SecurityOptions || []).some((o) => /name=userns/.test(o));
+      const ok = (dj['userns-remap'] && dj['userns-remap'] !== '') || secUserns;
+      return ok ? { status: 'pass' } : { status: 'warn' };
+    }));
+
+  // HOST-06: no-new-privileges default (daemon-wide)
+  checks.push(perNode(audits, 'HOST-06', 'Daemon: no-new-privileges Default', 'low',
+    'daemon.json "no-new-privileges": true setzen, damit Prozesse keine zusätzlichen Rechte erlangen.',
+    (a) => {
+      const dj = a.daemonJson || {};
+      return dj['no-new-privileges'] === true ? { status: 'pass' } : { status: 'warn' };
+    }));
+
+  // HOST-07: seccomp / apparmor active
+  checks.push(perNode(audits, 'HOST-07', 'seccomp/AppArmor aktiv', 'medium',
+    'seccomp- und AppArmor-/SELinux-Profile nicht deaktivieren (Default-seccomp-Profil beibehalten).',
+    (a) => {
+      const so = a.info?.SecurityOptions || [];
+      const hasSeccomp = so.some((o) => /name=seccomp/.test(o));
+      const seccompUnconfined = so.some((o) => /seccomp.*unconfined/i.test(o));
+      const hasLsm = so.some((o) => /name=(apparmor|selinux)/.test(o));
+      if (seccompUnconfined) return { status: 'warn', reason: 'seccomp: unconfined' };
+      if (hasSeccomp || hasLsm) return { status: 'pass' };
+      return { status: 'warn', reason: 'kein seccomp/AppArmor gemeldet' };
+    }));
+
+  // HOST-08: inter-container communication restricted (icc=false)
+  checks.push(perNode(audits, 'HOST-08', 'Inter-Container-Kommunikation (icc=false)', 'low',
+    'Auf dem Default-Bridge "icc": false setzen; Kommunikation gezielt über benutzerdefinierte Netze erlauben.',
+    (a) => {
+      const dj = a.daemonJson || {};
+      return dj.icc === false ? { status: 'pass' } : { status: 'warn' };
+    }));
+
+  // HOST-09: log rotation / driver configured
+  checks.push(perNode(audits, 'HOST-09', 'Log-Rotation/-Treiber konfiguriert', 'low',
+    'Log-Treiber + Rotation setzen (z. B. json-file mit max-size/max-file oder journald), damit Logs nicht die Platte füllen.',
+    (a) => {
+      const dj = a.daemonJson || {};
+      const drv = dj['log-driver'];
+      const opts = dj['log-opts'] || {};
+      const rotated = drv === 'journald' || drv === 'local' || (opts['max-size'] != null);
+      return rotated ? { status: 'pass' } : { status: 'warn', reason: drv ? `${drv} ohne max-size` : 'Default json-file ohne Rotation' };
+    }));
+
+  // Note about unreachable nodes.
+  if (unreachable.length) {
+    checks.push({
+      id: 'HOST-00', category: 'host', title: 'Node-Erreichbarkeit für Host-Checks', severity: 'info',
+      status: 'warn', detail: `${unreachable.length} Node(s) ohne Host-Audit (Agent nicht erreichbar).`,
+      remediation: 'Sicherstellen, dass der swarmdash-agent (global) auf allen Nodes läuft und /host mountet.',
+      objects: unreachable,
+    });
+  }
+  return checks;
+}
+

@@ -23,7 +23,7 @@ import { readFile, statfs } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import Docker from 'dockerode';
 import { WebSocketServer } from 'ws';
-import { exportVolume, importVolume, volumeSize, migrationDiskProbe } from './volarchive.js';
+import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
 
@@ -301,6 +301,11 @@ const server = http.createServer(async (req, res) => {
       const clean = u.searchParams.get('clean') === '1';
       await importVolume(name, req, { clean });
       return json({ ok: true });
+    }
+    if (u.pathname === '/volume-copy' && req.method === 'POST') {
+      const { src, dst, clean } = await readJson(req);
+      if (!src || !dst) { res.statusCode = 400; return json({ error: 'src und dst erforderlich' }); }
+      return json(await volumeCopyLocal(src, dst, { clean: Boolean(clean) }));
     }
 
     if (u.pathname === '/container-config') {

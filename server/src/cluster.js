@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { listAgents, agentBaseForNode } from './metrics.js';
-import { exportVolume, importVolume, volumeSize, migrationDiskProbe } from './volarchive.js';
+import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
 
@@ -492,6 +492,21 @@ export async function localNodeId() {
   return info.Swarm?.NodeID || null;
 }
 
+/** Run a same-node volume copy on the given node (local manager or via agent). */
+async function runCopyOnNode(nodeId, src, dst, clean, localId) {
+  const local = !nodeId || nodeId === localId;
+  if (local) return volumeCopyLocal(src, dst, { clean });
+  const base = await agentBaseForNode(nodeId);
+  if (!base) throw new Error('Node nicht erreichbar (Agent erforderlich)');
+  // Large copies: allow up to 6h before aborting.
+  const r = await fetchWithTimeout(`${base}/volume-copy`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ src, dst, clean: Boolean(clean) }),
+  }, 6 * 3600 * 1000);
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `Kopie fehlgeschlagen (HTTP ${r.status})`); }
+  return r.json();
+}
+
 /**
  * Duplicate a volume's contents into a new volume, possibly on another node.
  * Optional callbacks report progress: onSize(totalBytes|null) once, then
@@ -506,6 +521,34 @@ export async function volumeDuplicate({ srcNodeId, name, dstNodeId, newName, cle
   const localId = info.Swarm?.NodeID || null;
   const srcLocal = !srcNodeId || srcNodeId === localId;
   const dstLocal = !dstNodeId || dstNodeId === localId;
+
+  // FAST PATH — same node: copy inside ONE helper container on that node, so the
+  // data never streams through the manager's Node.js process (memory-safe for
+  // large volumes; fixes manager freezes on low-RAM managers). Cross-node still
+  // uses the streaming path below.
+  const srcNode = srcNodeId || localId;
+  const dstNode = dstNodeId || localId;
+  if (srcNode === dstNode) {
+    const total = await volumeSizeOf(srcNodeId, name, localId).catch(() => null);
+    if (onSize) onSize(total);
+    const copyP = runCopyOnNode(srcNode, name, newName, clean, localId);
+    if (onBytes) {
+      let done = false;
+      copyP.then(() => { done = true; }, () => { done = true; });
+      (async () => {
+        while (!done) {
+          await sleep(2000);
+          if (done) break;
+          const b = await volumeSizeOf(dstNodeId, newName, localId).catch(() => null);
+          if (b != null && !done) onBytes(b);
+        }
+      })();
+    }
+    await copyP;
+    if (onBytes && total != null) onBytes(total);
+    return { ok: true, name: newName, srcNodeId: srcNode, dstNodeId: dstNode, sameNode: true };
+  }
+
   const srcBase = srcLocal ? null : await agentBaseForNode(srcNodeId);
   const dstBase = dstLocal ? null : await agentBaseForNode(dstNodeId);
   if (!srcLocal && !srcBase) throw new Error('Quell-Node nicht erreichbar (Agent erforderlich)');

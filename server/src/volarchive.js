@@ -73,6 +73,27 @@ export async function volumeSize(volumeName) {
 }
 
 /**
+ * Same-node copy of a volume/bind source into a destination volume, performed
+ * ENTIRELY inside a single helper container (source + dest both mounted). The
+ * data moves through a kernel pipe inside the container — it never traverses the
+ * dashboard's Node.js process. This is the memory-safe path for same-node volume
+ * duplication / migration: a huge volume no longer streams through the manager's
+ * RAM. Used by the manager (local node) and by the agent (its own node).
+ */
+export async function volumeCopyLocal(srcName, dstName, { clean = false } = {}) {
+  if (!srcName || !dstName) throw new Error('srcName und dstName erforderlich');
+  await docker.createVolume({ Name: dstName }).catch(() => {});
+  await ensureImage();
+  const wipe = clean ? 'find /dst -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null;' : '';
+  // tar-pipe copies contents incl. hidden files, preserves perms/owners, and
+  // streams inside the container (no data through Node).
+  const script = `set -e; ${wipe} (cd /src && tar cf - .) | (cd /dst && tar xf -); echo COPY_OK`;
+  const { code, output } = await runEphemeral([`${srcName}:/src:ro`, `${dstName}:/dst`], script);
+  if (code !== 0 || !/COPY_OK/.test(output)) throw new Error(output || `Kopie fehlgeschlagen (Exit ${code})`);
+  return { ok: true };
+}
+
+/**
  * Disk pre-flight probe for a bind→volume migration, run ON THE NODE that will
  * host the new volume. Mounts the bind source read-only and a throwaway probe
  * volume, then reports:

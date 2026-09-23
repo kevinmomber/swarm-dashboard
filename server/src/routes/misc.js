@@ -54,12 +54,16 @@ router.get('/networks/:id/usage', async (req, res, next) => {
     }
 
     const removable = usingServices.length === 0 && containers.length === 0 && !netInfo.Ingress;
+    const ipam = (netInfo.IPAM?.Config || []).map((c) => ({ subnet: c.Subnet || null, gateway: c.Gateway || null }));
     res.json({
       id: netId,
       name: netName,
       driver: netInfo.Driver,
       scope: netInfo.Scope,
       ingress: netInfo.Ingress || false,
+      attachable: netInfo.Attachable || false,
+      internal: netInfo.Internal || false,
+      ipam,
       services: usingServices,
       containers,
       removable,

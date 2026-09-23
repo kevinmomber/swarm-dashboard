@@ -45,8 +45,17 @@ function NetworkDetail({ net, onClose, onDeleted }) {
         <>
           <table style={{ marginBottom: 12 }}>
             <tbody>
+              <tr><td>ID</td><td className="mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>{usage.id}</td></tr>
               <tr><td>Driver</td><td className="mono">{usage.driver}</td></tr>
               <tr><td>Scope</td><td className="mono">{usage.scope}</td></tr>
+              <tr><td>Attachable</td><td>{usage.attachable ? 'ja' : 'nein'}</td></tr>
+              <tr><td>Internal</td><td>{usage.internal ? 'ja' : 'nein'}</td></tr>
+              {(usage.ipam || []).map((c, i) => (
+                <tr key={i}>
+                  <td>IPv4 Subnet / Gateway{usage.ipam.length > 1 ? ` (${i + 1})` : ''}</td>
+                  <td className="mono">{c.subnet || '–'}{c.gateway ? ` · GW ${c.gateway}` : ''}</td>
+                </tr>
+              ))}
               {usage.ingress && <tr><td>Typ</td><td><Badge kind="info">Ingress</Badge></td></tr>}
             </tbody>
           </table>

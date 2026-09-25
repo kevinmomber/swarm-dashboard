@@ -17,7 +17,15 @@ RUN apk update \
            /root/.npm /root/.cache /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
  && rm -rf /var/cache/apk/*
 
-# Updated server source (dependencies unchanged vs 1.7.0 -> reuse base node_modules)
+# Overlay pure-JS deps added/bumped since the 1.7.0 base image (npm registry is
+# TLS-blocked, so these are staged from the host node_modules instead of installed):
+#   node-forge  (new dependency used by server/src/pki.js)
+#   nodemailer  (bumped 6.x -> 9.x; base image still has 6.9.15)
+# Both are zero-dependency, platform-neutral JavaScript packages.
+COPY build-deps/node-forge ./server/node_modules/node-forge
+COPY build-deps/nodemailer ./server/node_modules/nodemailer
+
+# Updated server source (remaining dependencies unchanged vs 1.7.0 -> reuse base node_modules)
 COPY server/src ./server/src
 COPY server/package.json ./server/package.json
 

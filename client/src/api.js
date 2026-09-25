@@ -1,6 +1,12 @@
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const TOKEN_KEY = 'swarmdash.token';
 
+// Deployment base prefix injected by the server (empty at site root, e.g.
+// '/swarmdash' when Traefik serves this app under a stripped sub-path). All
+// absolute /api and /ws URLs are prefixed with it so they route correctly.
+const BASE = (typeof window !== 'undefined' && window.__BASE_PREFIX__) || '';
+const apiUrl = (path) => `${BASE}/api${path}`;
+
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
 
@@ -23,31 +29,31 @@ async function handle(res) {
 }
 
 export const api = {
-  get: (path) => fetch(`/api${path}`, { headers: { ...authHeaders() } }).then(handle),
-  getText: (path) => fetch(`/api${path}`, { headers: { ...authHeaders() } }).then(async (res) => {
+  get: (path) => fetch(apiUrl(path), { headers: { ...authHeaders() } }).then(handle),
+  getText: (path) => fetch(apiUrl(path), { headers: { ...authHeaders() } }).then(async (res) => {
     if (res.status === 401) { setToken(null); window.dispatchEvent(new Event('swarmdash-unauth')); }
     const text = await res.text();
     if (!res.ok) { try { throw new Error(JSON.parse(text)?.error || `HTTP ${res.status}`); } catch { throw new Error(`HTTP ${res.status}`); } }
     return text;
   }),
   post: (path, body) =>
-    fetch(`/api${path}`, {
+    fetch(apiUrl(path), {
       method: 'POST',
       headers: { ...JSON_HEADERS, ...authHeaders() },
       body: JSON.stringify(body || {}),
     }).then(handle),
   put: (path, body) =>
-    fetch(`/api${path}`, {
+    fetch(apiUrl(path), {
       method: 'PUT',
       headers: { ...JSON_HEADERS, ...authHeaders() },
       body: JSON.stringify(body || {}),
     }).then(handle),
-  del: (path) => fetch(`/api${path}`, { method: 'DELETE', headers: { ...authHeaders() } }).then(handle),
+  del: (path) => fetch(apiUrl(path), { method: 'DELETE', headers: { ...authHeaders() } }).then(handle),
 };
 
 /** POST that consumes a Server-Sent-Events response, invoking onEvent per event. */
 export async function postSSE(path, body, onEvent) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: 'POST',
     headers: { ...JSON_HEADERS, ...authHeaders() },
     body: JSON.stringify(body || {}),
@@ -98,18 +104,18 @@ function wsToken() {
 export function logSocket(serviceId, tail = 200) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return new WebSocket(
-    `${proto}://${location.host}/ws/logs?service=${encodeURIComponent(serviceId)}&tail=${tail}${wsToken()}`
+    `${proto}://${location.host}${BASE}/ws/logs?service=${encodeURIComponent(serviceId)}&tail=${tail}${wsToken()}`
   );
 }
 
 export function execSocket(serviceId, shell = '/bin/sh') {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return new WebSocket(
-    `${proto}://${location.host}/ws/exec?service=${encodeURIComponent(serviceId)}&shell=${encodeURIComponent(shell)}${wsToken()}`
+    `${proto}://${location.host}${BASE}/ws/exec?service=${encodeURIComponent(serviceId)}&shell=${encodeURIComponent(shell)}${wsToken()}`
   );
 }
 
 export function eventSocket() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return new WebSocket(`${proto}://${location.host}/ws/events?${wsToken().replace(/^&/, '')}`);
+  return new WebSocket(`${proto}://${location.host}${BASE}/ws/events?${wsToken().replace(/^&/, '')}`);
 }

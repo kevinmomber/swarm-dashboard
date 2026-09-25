@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { listAgents, agentBaseForNode } from './metrics.js';
 import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
-import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
+import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, containerStatsBatch, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
 import { authConfigFor } from './registryauth.js';
 
@@ -491,6 +491,44 @@ export async function volumeSizeOnNode(nodeId, name) {
 export async function localNodeId() {
   const info = await docker.info();
   return info.Swarm?.NodeID || null;
+}
+
+/**
+ * Live CPU/RAM stats for a set of containers, resolved per node: containers on
+ * the manager's own node are read directly via the local socket, the rest are
+ * fetched from each node's agent in one batched call. Never throws — nodes/ids
+ * that can't be reached simply map to null.
+ *
+ * @param items [{ nodeId, containerId }]
+ * @returns { [containerId]: { cpuPct, memBytes, memLimit, memPct } | null }
+ */
+export async function containerStatsOnNodes(items = []) {
+  await requireManager();
+  const localId = await localNodeId();
+  const byNode = new Map(); // nodeId -> [containerId]
+  for (const it of items) {
+    if (!it.containerId) continue;
+    const key = it.nodeId || localId || '';
+    if (!byNode.has(key)) byNode.set(key, []);
+    byNode.get(key).push(it.containerId);
+  }
+  const out = {};
+  await Promise.all([...byNode.entries()].map(async ([nodeId, ids]) => {
+    const local = !nodeId || nodeId === localId;
+    if (local) {
+      const s = await containerStatsBatch(ids).catch(() => ({}));
+      Object.assign(out, s);
+      return;
+    }
+    const base = await agentBaseForNode(nodeId);
+    if (!base) { for (const id of ids) out[id] = null; return; }
+    try {
+      const r = await fetchWithTimeout(`${base}/container-stats?ids=${ids.map(encodeURIComponent).join(',')}`, {}, 8000);
+      if (r.ok) { Object.assign(out, (await r.json()).stats || {}); return; }
+    } catch { /* fall through */ }
+    for (const id of ids) out[id] = null;
+  }));
+  return out;
 }
 
 /** Run a same-node volume copy on the given node (local manager or via agent). */

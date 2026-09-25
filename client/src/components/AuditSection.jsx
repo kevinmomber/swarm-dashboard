@@ -1,16 +1,34 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { api } from '../api.js';
 import { useApi } from './useApi.js';
 import { Badge, ago, useToast } from './ui.jsx';
 
 const kindOf = (status) => (status >= 500 ? 'err' : status >= 400 ? 'warn' : 'ok');
 
+/** Top-level path group of an audit entry, e.g. "/services/x/labels" -> "/services". */
+const pathGroup = (path) => {
+  const seg = (path || '').split('/').filter(Boolean)[0];
+  return seg ? `/${seg}` : '/';
+};
+
 export default function AuditSection() {
   const toast = useToast();
   const { data, loading, reload } = useApi('/audit?limit=300', { poll: 10000 });
   const [q, setQ] = useState('');
+  const [pathFilter, setPathFilter] = useState('');
+
+  // Distinct path groups present in the log, for the filter dropdown.
+  const pathOptions = useMemo(() => {
+    const counts = new Map();
+    for (const e of data || []) {
+      const g = pathGroup(e.path);
+      counts.set(g, (counts.get(g) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [data]);
 
   const rows = (data || []).filter((e) => {
+    if (pathFilter && pathGroup(e.path) !== pathFilter) return false;
     if (!q) return true;
     const t = q.toLowerCase();
     return [e.action, e.path, e.actor, e.method, String(e.status)].some((v) => (v || '').toString().toLowerCase().includes(t));
@@ -29,6 +47,17 @@ export default function AuditSection() {
           <div className="help">Alle ändernden Aktionen (Erstellen/Ändern/Löschen) mit Benutzer, Zeit und Ergebnis.</div>
         </div>
         <div className="spacer" style={{ flex: 1 }} />
+        <select
+          style={{ maxWidth: 220 }}
+          value={pathFilter}
+          onChange={(e) => setPathFilter(e.target.value)}
+          title="Nach Log-Pfad filtern"
+        >
+          <option value="">Alle Pfade{data ? ` (${data.length})` : ''}</option>
+          {pathOptions.map(([p, n]) => (
+            <option key={p} value={p}>{p} ({n})</option>
+          ))}
+        </select>
         <input style={{ maxWidth: 240 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Filtern…" />
         <button className="btn" onClick={reload}>↻</button>
         <button className="btn danger" onClick={clear}>Leeren</button>

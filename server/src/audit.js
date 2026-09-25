@@ -66,9 +66,36 @@ export async function record({ method, path: pathname, actor, status, ms, ip }) 
   flush();
 }
 
+/**
+ * Record an authentication attempt (login success or failure). Unlike record(),
+ * this bypasses the method/IGNORE gating so security-relevant auth events are
+ * always captured — including failed logins, which are the ones that matter most
+ * for spotting brute-force attempts. The attempted username is stored as the
+ * actor even on failure (forensics); passwords are never recorded.
+ */
+export async function recordAuth({ event, username, status, ms, ip }) {
+  const ok = status >= 200 && status < 300;
+  const labels = {
+    login: ok ? 'Login erfolgreich' : 'Login fehlgeschlagen',
+    logout: 'Logout',
+  };
+  const list = await load();
+  list.push({
+    at: new Date().toISOString(),
+    method: 'AUTH',
+    path: `/auth/${event}`,
+    action: labels[event] || `Auth ${event}`,
+    actor: username || 'anonymous',
+    status,
+    ms: ms ?? null,
+    ip: ip || null,
+  });
+  if (list.length > MAX) cache = list.slice(-MAX);
+  flush();
+}
+
 /** Express middleware: audit every mutating request after it completes. */
-export function auditMiddleware() {
-  return (req, res, next) => {
+export function auditMiddleware() {  return (req, res, next) => {
     if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) return next();
     const started = Date.now();
     res.on('finish', () => {

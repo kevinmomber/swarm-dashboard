@@ -2,7 +2,7 @@ import express from 'express';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -87,13 +87,27 @@ app.get('/metrics', async (req, res) => {
   }
 });
 
-// --- Static client (built with Vite) ---
+// --- Static client (built with Vite, base './') ---
+// The bundle is path-prefix agnostic: assets are emitted as relative URLs and
+// resolved at runtime against an injected <base href>. When Traefik serves this
+// app under a stripped sub-path (e.g. /swarmdash), its StripPrefix middleware
+// forwards the original prefix in X-Forwarded-Prefix; we echo that into a <base>
+// tag plus window.__BASE_PREFIX__ so assets, the router basename, the /api client
+// and the /ws sockets all target <prefix>/… . Direct access (no header) => root.
 const clientDir = path.resolve(__dirname, '../../client/dist');
 if (existsSync(clientDir)) {
-  app.use(express.static(clientDir));
-  app.get(/^(?!\/api).*/, (req, res) => {
-    res.sendFile(path.join(clientDir, 'index.html'));
-  });
+  const indexHtmlRaw = readFileSync(path.join(clientDir, 'index.html'), 'utf8');
+  const sendIndex = (req, res) => {
+    const fwd = String(req.headers['x-forwarded-prefix'] || '').trim();
+    const prefix = fwd.replace(/\/+$/, ''); // '/swarmdash' or ''
+    const baseHref = prefix ? `${prefix}/` : '/';
+    const inject = `<base href="${baseHref}"><script>window.__BASE_PREFIX__=${JSON.stringify(prefix)};</script>`;
+    res.type('html').send(indexHtmlRaw.replace('<head>', `<head>${inject}`));
+  };
+  // Serve hashed assets statically, but never let express.static emit index.html
+  // directly — it must always go through sendIndex so the <base> tag is injected.
+  app.use(express.static(clientDir, { index: false }));
+  app.get(/^(?!\/api).*/, sendIndex);
 }
 
 // --- Error handler ---

@@ -3,6 +3,7 @@ import {
   authStatus, setEnabled, listUsers, createUser, deleteUser, changePassword,
   verifyLogin, issueToken, verifyToken, isEnabled,
 } from '../auth.js';
+import { recordAuth } from '../audit.js';
 
 const router = Router();
 
@@ -10,6 +11,11 @@ const bearer = (req) => {
   const h = req.headers.authorization || '';
   return h.startsWith('Bearer ') ? h.slice(7) : null;
 };
+
+/** Best-effort client IP, honouring the reverse proxy's X-Forwarded-For. */
+const clientIp = (req) =>
+  (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '')
+    .toString().split(',')[0].trim() || null;
 
 /** During setup (auth disabled) admin endpoints are open; once enabled require an admin token. */
 async function guardAdmin(req, res, next) {
@@ -32,11 +38,17 @@ router.get('/status', async (req, res, next) => {
 });
 
 router.post('/login', async (req, res, next) => {
+  const started = Date.now();
   try {
     const { username, password } = req.body || {};
     const user = await verifyLogin(username, password);
-    if (!user) return res.status(401).json({ error: 'Benutzername oder Passwort falsch' });
-    res.json({ token: await issueToken(user), user });
+    if (!user) {
+      await recordAuth({ event: 'login', username, status: 401, ms: Date.now() - started, ip: clientIp(req) });
+      return res.status(401).json({ error: 'Benutzername oder Passwort falsch' });
+    }
+    const body = { token: await issueToken(user), user };
+    await recordAuth({ event: 'login', username: user.username, status: 200, ms: Date.now() - started, ip: clientIp(req) });
+    res.json(body);
   } catch (err) { next(err); }
 });
 

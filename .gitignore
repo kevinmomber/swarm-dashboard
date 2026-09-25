@@ -11,6 +11,9 @@ data/
 # Exported image tarballs
 *.tar
 
+# Offline-build staging (host node_modules copies for Dockerfile.offline)
+build-deps/
+
 # Editor/OS noise
 .vscode/
 .idea/

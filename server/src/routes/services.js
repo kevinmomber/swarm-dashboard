@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
 import { exportService, updateServiceLabels, resolveRunningContainer } from '../serviceops.js';
-import { migrateServiceToNode } from '../cluster.js';
+import { migrateServiceToNode, containerStatsOnNodes, volumeSizeOnNode } from '../cluster.js';
 import { PROXY_LABEL, GROUP_LABEL, BACKUP_LABEL } from '../settings.js';
 import { authConfigFor } from '../registryauth.js';
 
@@ -440,10 +440,31 @@ router.get('/:id/placement', async (req, res, next) => {
         state: t.Status?.State,
         desiredState: t.DesiredState,
         timestamp: t.Status?.Timestamp,
+        containerId: t.Status?.ContainerStatus?.ContainerID || null,
         node: nodeMap.get(t.NodeID) || { hostname: t.NodeID, role: '?', id: t.NodeID },
       }))
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
-    res.json({ service: name, tasks: running });
+
+    // Live CPU/RAM per task, resolved node-aware (local socket + node agents).
+    const stats = await containerStatsOnNodes(
+      running.filter((t) => t.containerId).map((t) => ({ nodeId: t.node.id, containerId: t.containerId }))
+    ).catch(() => ({}));
+    for (const t of running) t.stats = (t.containerId && stats[t.containerId]) || null;
+
+    // Named volumes mounted by the service, sized on a node that runs a task.
+    const mounts = info.Spec?.TaskTemplate?.ContainerSpec?.Mounts || [];
+    const anyNode = running[0]?.node?.id || null;
+    const volumes = await Promise.all(
+      mounts
+        .filter((m) => m.Type === 'volume' && m.Source)
+        .map(async (m) => ({
+          name: m.Source,
+          target: m.Target || null,
+          bytes: await volumeSizeOnNode(anyNode, m.Source).catch(() => null),
+        }))
+    );
+
+    res.json({ service: name, tasks: running, volumes });
   } catch (err) {
     next(err);
   }

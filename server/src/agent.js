@@ -24,7 +24,7 @@ import { createRequire } from 'node:module';
 import Docker from 'dockerode';
 import { WebSocketServer } from 'ws';
 import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
-import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
+import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, containerStatsBatch, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
 
 const PORT = Number(process.env.AGENT_PORT) || 9787;
@@ -322,6 +322,13 @@ const server = http.createServer(async (req, res) => {
       const id = u.searchParams.get('id');
       if (!id) { res.statusCode = 400; return json({ error: 'id fehlt' }); }
       return json(await containerState(id));
+    }
+    if (u.pathname === '/container-stats') {
+      // Live CPU/RAM for one or more local containers. GET ?ids=a,b,c (or POST {ids}).
+      let ids = (u.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (req.method === 'POST') { const b = await readJson(req); if (Array.isArray(b.ids)) ids = b.ids; }
+      if (ids.length === 0) { res.statusCode = 400; return json({ error: 'ids fehlt' }); }
+      return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, stats: await containerStatsBatch(ids) });
     }
     if (u.pathname === '/container-migrate' && req.method === 'POST') {
       const { id, source, target, volume } = await readJson(req);

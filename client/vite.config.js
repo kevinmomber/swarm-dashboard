@@ -15,4 +15,8 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
+  // Relative asset URLs so the built bundle can be served either at the site root
+  // (direct :3040) or under a Traefik-stripped sub-path (e.g. /swarmdash); the
+  // server injects a matching <base href> at runtime. See server/src/index.js.
+  base: './',
 });

@@ -21,6 +21,22 @@ const DEFAULT_NET = 'swarmdash-proxy-net';
 
 const sanitize = (s) => s.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
 
+/**
+ * Parse the per-service host label. Accepts a bare hostname ("app.example.com"),
+ * a hostname with a path ("app.example.com/crm"), an IP ("203.0.113.10"), or an
+ * IP with a path ("203.0.113.10/crm"). A leading scheme is stripped.
+ * Returns { host, path } where path is normalised to "/segment" or null.
+ */
+function parseHostLabel(raw) {
+  const v = String(raw || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  if (!v) return { host: '', path: null };
+  const slash = v.indexOf('/');
+  if (slash === -1) return { host: v, path: null };
+  const host = v.slice(0, slash);
+  const rest = v.slice(slash).replace(/^\/+/, '').replace(/\/+$/, '');
+  return { host, path: rest ? `/${rest}` : null };
+}
+
 function servicePort(spec, explicit) {
   if (explicit) return Number(explicit);
   const ports = spec?.EndpointSpec?.Ports || [];
@@ -30,11 +46,26 @@ function servicePort(spec, explicit) {
 
 /** Compute the routing target for a proxy-tagged service. */
 function routing(serviceName, labels, proxy) {
-  const host = labels[PROXY_HOST_LABEL] || '';
-  if (host) return { mode: 'host', host, path: null };
-  const ext = proxy.externalDns;
+  const ext = String(proxy.externalDns || '').trim();
+  const parsed = parseHostLabel(labels[PROXY_HOST_LABEL]);
+  // Traefik's Host() matcher works with a literal IP just as well as a DNS name
+  // (it matches the request Host header), so an IP is a perfectly valid host.
+  if (parsed.host || parsed.path) {
+    // Real hostname/IP without a path -> classic host-based routing.
+    if (parsed.host && !parsed.path) {
+      return { mode: 'host', host: parsed.host, path: null };
+    }
+    // Host + path -> host-scoped path routing.
+    const p = parsed.path || `/${serviceName}`;
+    if (parsed.host) return { mode: 'hostpath', host: parsed.host, path: p };
+    // Only a path given (e.g. "/crm"): scope it to the proxy's external host
+    // (may be an IP on staging without DNS) so multiple path apps can coexist
+    // behind the same address. Falls back to pure PathPrefix if no host is set.
+    if (ext) return { mode: 'hostpath', host: ext, path: p };
+    return { mode: 'pathonly', host: '', path: p };
+  }
   if (!ext) throw new Error('Externer DNS-Name im Reverse-Proxy nicht konfiguriert');
-  return { mode: 'path', host: ext, path: `/${serviceName}` };
+  return { mode: 'hostpath', host: ext, path: `/${serviceName}` };
 }
 
 /**
@@ -75,9 +106,11 @@ export function traefikLabels(serviceName, spec, labels, proxy) {
   const route = routing(serviceName, labels, proxy);
   const port = servicePort(spec, labels[PROXY_PORT_LABEL]);
   const eps = serviceEntrypoints(labels, proxy);
-  const ruleStr = route.mode === 'host'
-    ? `Host(\`${route.host}\`)`
-    : `Host(\`${route.host}\`) && PathPrefix(\`${route.path}\`)`;
+  const hasPath = route.mode === 'hostpath' || route.mode === 'pathonly';
+  let ruleStr;
+  if (route.mode === 'host') ruleStr = `Host(\`${route.host}\`)`;
+  else if (route.mode === 'hostpath') ruleStr = `Host(\`${route.host}\`) && PathPrefix(\`${route.path}\`)`;
+  else ruleStr = `PathPrefix(\`${route.path}\`)`; // pathonly (IP or no host)
 
   const out = {
     'traefik.enable': 'true',
@@ -86,7 +119,7 @@ export function traefikLabels(serviceName, spec, labels, proxy) {
     // is attached to its own network(s) plus the proxy overlay.
     'traefik.docker.network': proxyNetwork(proxy),
   };
-  if (route.mode === 'path') {
+  if (hasPath) {
     out[`traefik.http.middlewares.${r}-strip.stripprefix.prefixes`] = route.path;
   }
 
@@ -106,7 +139,7 @@ export function traefikLabels(serviceName, spec, labels, proxy) {
       if (mtls === 'require') out[`traefik.http.routers.${r}.tls.options`] = 'mtls@file';
       else if (mtls === 'optional') out[`traefik.http.routers.${r}.tls.options`] = 'mtls-optional@file';
     }
-    if (route.mode === 'path') out[`traefik.http.routers.${r}.middlewares`] = `${r}-strip`;
+    if (hasPath) out[`traefik.http.routers.${r}.middlewares`] = `${r}-strip`;
   }
 
   // Plain HTTP (web) router.
@@ -123,7 +156,7 @@ export function traefikLabels(serviceName, spec, labels, proxy) {
     out[`traefik.http.routers.${r}.entrypoints`] = 'web';
     out[`traefik.http.routers.${r}.rule`] = ruleStr;
     out[`traefik.http.routers.${r}.service`] = r;
-    if (route.mode === 'path') out[`traefik.http.routers.${r}.middlewares`] = `${r}-strip`;
+    if (hasPath) out[`traefik.http.routers.${r}.middlewares`] = `${r}-strip`;
   }
 
   // Tailscale exposure (A-verfeinert): a dedicated, host-independent router on the

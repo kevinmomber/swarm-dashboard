@@ -5,6 +5,7 @@
  */
 import { docker } from './docker.js';
 import { Writable } from 'node:stream';
+import os from 'node:os';
 import { ensureImage } from './ephemeral.js';
 
 /* --------------------------- exec helper --------------------------- */
@@ -36,6 +37,61 @@ export async function execCapture(id, cmd, { stdin = null } = {}) {
 export async function containerTop(id, psArgs = 'aux') {
   const data = await docker.getContainer(id).top({ ps_args: psArgs });
   return { titles: data.Titles || [], processes: data.Processes || [] };
+}
+
+/* ----------------------- live resource stats ----------------------- */
+
+/**
+ * One-shot live CPU/memory stats for a single container, computed from Docker's
+ * stats snapshot. Robust across cgroup v1 and v2:
+ *  - CPU%: (cpuDelta / systemDelta) * onlineCPUs * 100, computed from TWO samples
+ *    ~1s apart (a single non-streaming read carries empty precpu_stats and would
+ *    yield only a since-start average, so we sample twice for an instantaneous
+ *    figure).
+ *  - Memory: usage minus the reclaimable page cache (inactive_file on v2, cache
+ *    on v1), against the effective limit.
+ * Returns null fields (never throws) when a value is unavailable.
+ */
+function memFrom(cur) {
+  const mem = cur.memory_stats || {};
+  const cacheBytes = mem.stats?.inactive_file ?? mem.stats?.total_inactive_file ?? mem.stats?.cache ?? 0;
+  const memUsed = mem.usage != null ? Math.max(0, mem.usage - cacheBytes) : null;
+  const memLimit = mem.limit ?? null;
+  const memPct = memUsed != null && memLimit ? Math.round((memUsed / memLimit) * 100) : null;
+  return { memBytes: memUsed, memLimit, memPct };
+}
+
+function cpuPctFrom(cur, pre) {
+  const c = cur.cpu_stats || {};
+  const p = pre.cpu_stats || {};
+  const cpuDelta = (c.cpu_usage?.total_usage ?? 0) - (p.cpu_usage?.total_usage ?? 0);
+  const sysDelta = (c.system_cpu_usage ?? 0) - (p.system_cpu_usage ?? 0);
+  const onlineCPUs = c.online_cpus || c.cpu_usage?.percpu_usage?.length || os.cpus()?.length || 1;
+  if (cpuDelta > 0 && sysDelta > 0) {
+    return Math.round((cpuDelta / sysDelta) * onlineCPUs * 100 * 10) / 10;
+  }
+  return 0;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Live stats for one container id (two stats reads ~1s apart for real CPU%). */
+export async function containerStats(id) {
+  const c = docker.getContainer(id);
+  const s1 = await c.stats({ stream: false });
+  await sleep(1000);
+  const s2 = await c.stats({ stream: false });
+  return { cpuPct: cpuPctFrom(s2, s1), ...memFrom(s2) };
+}
+
+/** Live stats for several container ids in parallel; unreachable ids resolve to null. */
+export async function containerStatsBatch(ids = []) {
+  const out = {};
+  await Promise.all(ids.map(async (id) => {
+    try { out[id] = await containerStats(id); }
+    catch { out[id] = null; }
+  }));
+  return out;
 }
 
 /* ----------------------------- layers ------------------------------ */

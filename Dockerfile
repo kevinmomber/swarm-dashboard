@@ -1,17 +1,22 @@
 # --- Stage 1: build the React client ---
 FROM node:22-alpine AS client
+# npmjs.org is TLS-intercepted/blocked in this environment; default to the
+# Microsoft package-feed proxy. Override with --build-arg NPM_REGISTRY=... .
+ARG NPM_REGISTRY=https://registry.example.com/npm/
 WORKDIR /app/client
 COPY client/package.json ./
-RUN npm install
+RUN npm config set registry "$NPM_REGISTRY" && npm install
 COPY client/ ./
 RUN npm run build
 
 # --- Stage 2: install server deps (with CVE-fixed versions + overrides) ---
 FROM node:22-alpine AS server-deps
+ARG NPM_REGISTRY=https://registry.example.com/npm/
 WORKDIR /app/server
 COPY server/package.json ./
-# package.json bumps nodemailer to ^9 and forces qs>=6.16 / uuid>=11 via overrides.
-RUN npm install --omit=dev --no-audit --no-fund
+# package.json bumps nodemailer to ^10 and forces qs>=6.16, uuid>=11.1,
+# proxy-addr>=2.0.8, @grpc/grpc-js>=1.14.5 and ip-address>=10.7.2 via overrides.
+RUN npm config set registry "$NPM_REGISTRY" && npm install --omit=dev --no-audit --no-fund
 
 # --- Stage 3: runtime (hardened) ---
 FROM node:22-alpine

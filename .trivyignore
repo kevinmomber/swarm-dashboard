@@ -1,0 +1,12 @@
+# Accepted / non-exploitable vulnerabilities (reviewed).
+# Each entry MUST carry a justification and a review date.
+
+# CVE-2026-85393 — node-forge: RSA PKCS#1 v1.5 signature forgery on verification.
+# No upstream fix exists (node-forge 1.4.0 is the latest release).
+# Not exploitable here: node-forge is used ONLY to GENERATE the internal PKI
+# (X.509 assembly, CRL signing, PKCS#12 bundling) and to parse our own PEMs in
+# server/src/pki.js. The app never uses node-forge to VERIFY an externally
+# supplied RSA PKCS#1 v1.5 signature — mTLS client-cert verification is performed
+# by Traefik (Go), not by this process. Re-evaluate when node-forge ships a fix.
+# Reviewed: 2026-10-08
+CVE-2026-85393

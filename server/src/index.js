@@ -44,6 +44,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 
 const app = express();
+// Mitigation for body-parser decompression DoS (CVE-2026-111181): no legitimate
+// client of this API sends compressed request bodies, so reject any non-identity
+// Content-Encoding before the body parser can touch a decompression stream.
+app.use((req, res, next) => {
+  const enc = String(req.headers['content-encoding'] || '').trim().toLowerCase();
+  if (enc && enc !== 'identity') return res.status(415).json({ error: 'Content-Encoding wird nicht unterstützt' });
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 
 // --- API ---

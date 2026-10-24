@@ -10,3 +10,19 @@
 # by Traefik (Go), not by this process. Re-evaluate when node-forge ships a fix.
 # Reviewed: 2026-10-08
 CVE-2026-85393
+
+# CVE-2026-111181 — body-parser 1.20.8 (HIGH), decompression stream DoS. Fix
+# (1.20.9 / 2.4.0) is not yet available in the MS npm feed proxy (latest 1.20.8 / 2.3.0).
+# Mitigated in server/src/index.js: requests with a non-identity Content-Encoding
+# are rejected with 415 before the parser runs, so no decompression stream is created.
+# TODO: bump express/body-parser once the feed carries 1.20.9+.
+# Reviewed: 2026-10-24 (re-check by 2026-11-07)
+CVE-2026-111181
+
+# nodemailer 10.1.2 (MEDIUM) — addressparser quirks; fix 10.1.4 not yet in the MS feed.
+# Not exploitable here: mail is only sent by monitoring.js to the admin-configured
+# recipient (cfg.to); no attacker-controlled address strings are ever parsed.
+# TODO: bump to >=10.1.4 once available. Reviewed: 2026-10-24 (re-check by 2026-11-07)
+GHSA-85x2-q946-cp5h
+GHSA-8c8m-p3m8-cjg8
+GHSA-m943-m63m-w62w

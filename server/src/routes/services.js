@@ -116,6 +116,12 @@ router.get('/topology', async (req, res, next) => {
       docker.listServices(), docker.listNetworks(), taskSummary(),
     ]);
     const netName = new Map(networks.map((n) => [n.Id, n.Name]));
+    // Swarm-internal networks missing from the list (e.g. swarm-scoped "host").
+    const unknown = new Set();
+    for (const s of services) for (const n of (s.Spec?.TaskTemplate?.Networks || [])) if (!netName.has(n.Target)) unknown.add(n.Target);
+    await Promise.all([...unknown].map(async (t) => {
+      try { netName.set(t, (await docker.getNetwork(t).inspect()).Name); } catch { /* keep raw id */ }
+    }));
     const svc = services.map((s) => {
       const spec = s.Spec || {};
       const nets = (spec.TaskTemplate?.Networks || []).map((n) => netName.get(n.Target) || n.Target).filter((n) => n && n !== 'ingress');
@@ -243,11 +249,20 @@ router.get('/:id/config', async (req, res, next) => {
     const mode = spec.Mode || {};
     const nets = await docker.listNetworks();
     const nameById = new Map(nets.map((n) => [n.Id, n.Name]));
-    const networks = (spec.TaskTemplate?.Networks || []).map((n) => nameById.get(n.Target) || n.Target);
+    // Swarm may reference networks missing from the list (e.g. the swarm-scoped
+    // "host" network it creates internally) - resolve those by inspecting them.
+    const targets = (spec.TaskTemplate?.Networks || []).map((n) => n.Target);
+    await Promise.all(targets.filter((t) => !nameById.has(t)).map(async (t) => {
+      try { nameById.set(t, (await docker.getNetwork(t).inspect()).Name); } catch { /* keep raw id */ }
+    }));
+    const networks = targets.map((t) => nameById.get(t) || t);
+    // The built-in "host" network is local-scoped, so it is offered separately
+    // (hostNetwork flag) instead of as one of the overlay checkboxes.
+    const hostNetwork = networks.includes('host');
     const availableNetworks = nets
       .filter((n) => n.Scope === 'swarm' || n.Driver === 'overlay')
       .map((n) => n.Name)
-      .filter((n) => n && n !== 'ingress')
+      .filter((n) => n && n !== 'ingress' && n !== 'host')
       .sort();
     const ports = (spec.EndpointSpec?.Ports || []).map((p) => ({
       published: p.PublishedPort ?? '', target: p.TargetPort, protocol: (p.Protocol || 'tcp'), mode: p.PublishMode || 'ingress',
@@ -281,7 +296,8 @@ router.get('/:id/config', async (req, res, next) => {
       restartCondition: spec.TaskTemplate?.RestartPolicy?.Condition || 'any',
       ports,
       mounts,
-      networks,
+      networks: networks.filter((n) => n !== 'host'),
+      hostNetwork,
       availableNetworks,
       cpuLimit: toCpus(resNano.Limits?.NanoCPUs),
       memLimit: toMb(resNano.Limits?.MemoryBytes),
@@ -333,10 +349,28 @@ router.post('/:id/edit', async (req, res, next) => {
         .filter((m) => m && m.source && m.target)
         .map((m) => ({ Type: m.type === 'bind' ? 'bind' : 'volume', Source: String(m.source).trim(), Target: String(m.target).trim(), ReadOnly: Boolean(m.readOnly) }));
     }
-    if (Array.isArray(patch.networks)) {
+    if (patch.hostNetwork === true) {
+      // Host networking: the task shares the node's network namespace. Swarm only
+      // allows it as the sole network, and the routing mesh (ingress/VIP) cannot
+      // publish ports for it, so published ports are dropped and DNS-RR is used.
+      const nets = await docker.listNetworks();
+      const host = nets.find((n) => n.Name === 'host' && n.Driver === 'host');
+      if (!host) return res.status(400).json({ error: 'Host-Netzwerk auf diesem Cluster nicht gefunden' });
+      spec.TaskTemplate.Networks = [{ Target: host.Id }];
+      spec.EndpointSpec = { ...(spec.EndpointSpec || {}), Mode: 'dnsrr', Ports: [] };
+    } else if (Array.isArray(patch.networks)) {
       const nets = await docker.listNetworks();
       const idByName = new Map(nets.map((n) => [n.Name, n.Id]));
-      spec.TaskTemplate.Networks = patch.networks.map((nn) => ({ Target: idByName.get(nn) || nn }));
+      spec.TaskTemplate.Networks = patch.networks.filter((nn) => nn !== 'host').map((nn) => ({ Target: idByName.get(nn) || nn }));
+      // Leaving host mode: restore the default VIP endpoint mode, but only if the
+      // service was actually on the host network (don't touch deliberate dnsrr).
+      if (patch.hostNetwork === false && spec.EndpointSpec?.Mode === 'dnsrr') {
+        let wasHost = false;
+        for (const t of (info.Spec.TaskTemplate?.Networks || [])) {
+          try { if ((await docker.getNetwork(t.Target).inspect()).Driver === 'host') wasHost = true; } catch { /* ignore */ }
+        }
+        if (wasHost) spec.EndpointSpec.Mode = 'vip';
+      }
     }
     // Resource limits / reservations (CPUs and Memory in MB from the UI).
     const hasRes = ['cpuLimit', 'memLimit', 'cpuReservation', 'memReservation'].some((k) => patch[k] !== undefined);

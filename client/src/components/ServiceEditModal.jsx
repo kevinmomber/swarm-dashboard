@@ -28,6 +28,7 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
   const [origArgs, setOrigArgs] = useState('');
   const [mounts, setMounts] = useState([]);
   const [networks, setNetworks] = useState([]);
+  const [hostNetwork, setHostNetwork] = useState(false);
   const [availableNetworks, setAvailableNetworks] = useState([]);
   const [cpuLimit, setCpuLimit] = useState('');
   const [memLimit, setMemLimit] = useState('');
@@ -59,6 +60,7 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
         setOrigArgs((c.args || []).join(' '));
         setMounts((c.mounts || []).map((m) => ({ type: m.type || 'volume', source: m.source || '', target: m.target || '', readOnly: !!m.readOnly })));
         setNetworks(c.networks || []);
+        setHostNetwork(!!c.hostNetwork);
         setAvailableNetworks(c.availableNetworks || []);
         setCpuLimit(c.cpuLimit === '' || c.cpuLimit == null ? '' : String(c.cpuLimit));
         setMemLimit(c.memLimit === '' || c.memLimit == null ? '' : String(c.memLimit));
@@ -90,8 +92,8 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
       mounts: mounts
         .filter((m) => m.source.trim() && m.target.trim())
         .map((m) => ({ type: m.type, source: m.source.trim(), target: m.target.trim(), readOnly: !!m.readOnly })),
-      networks,
-      cpuLimit: cpuLimit.trim(),
+      networks: hostNetwork ? [] : networks,
+      hostNetwork,
       memLimit: memLimit.trim(),
       cpuReservation: cpuRes.trim(),
       memReservation: memRes.trim(),
@@ -172,7 +174,8 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
           </div>
           <div className="field">
             <label>Ports (veröffentlicht → Ziel)</label>
-            {ports.map((p, i) => (
+            {hostNetwork && <div className="help">Im Host-Netzwerk werden keine Ports veröffentlicht – der Container belegt seine Ports direkt auf dem Node.</div>}
+            {!hostNetwork && ports.map((p, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                 <input style={{ width: 90 }} value={p.published} onChange={(e) => setPort(i, 'published', e.target.value)} placeholder="Extern" />
                 <span>→</span>
@@ -188,7 +191,7 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
                 <button className="btn sm danger" onClick={() => removePort(i)}>✕</button>
               </div>
             ))}
-            <button className="btn sm" onClick={addPort}>+ Port</button>
+            <button className="btn sm" disabled={hostNetwork} onClick={addPort}>+ Port</button>
           </div>
           <div className="field">
             <label>Umgebungsvariablen (eine pro Zeile, KEY=VALUE)</label>
@@ -215,13 +218,23 @@ export default function ServiceEditModal({ service, onClose, onDone }) {
           </div>
           <div className="field">
             <label>Netzwerke</label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', marginBottom: 8 }}>
+              <input type="checkbox" checked={hostNetwork} onChange={(e) => setHostNetwork(e.target.checked)} />
+              Host-Netzwerk verwenden (<span className="mono">host</span>)
+            </label>
+            {hostNetwork && (
+              <div className="banner" style={{ marginBottom: 8 }}>
+                Der Service teilt den Netzwerk-Stack des Nodes. Er ist nicht über Service-DNS oder den Traefik-Proxy (Overlay) erreichbar, veröffentlichte Ports entfallen und es kann kein weiteres Netzwerk zugewiesen werden.
+                {!placementNode && ' Empfehlung: Service oben an einen Node binden, sonst ist unklar, auf welchem Node er lauscht.'}
+              </div>
+            )}
             {availableNetworks.length === 0 ? (
               <div className="help">Keine Overlay-Netzwerke gefunden.</div>
             ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, opacity: hostNetwork ? 0.45 : 1 }}>
                 {availableNetworks.map((n) => (
-                  <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}>
-                    <input type="checkbox" checked={networks.includes(n)} onChange={() => toggleNet(n)} />
+                  <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: hostNetwork ? 'not-allowed' : 'pointer', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}>
+                    <input type="checkbox" disabled={hostNetwork} checked={!hostNetwork && networks.includes(n)} onChange={() => toggleNet(n)} />
                     {n}
                   </label>
                 ))}

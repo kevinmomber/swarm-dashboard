@@ -18,6 +18,12 @@ const parentOptions = (node) => [...(node.interfaces || [])]
   .filter((i) => i.state !== 'down' || i.kind === 'physical')
   .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'physical' ? -1 : 1));
 
+// Layout helpers live at module scope on purpose: defined inside the component
+// they would get a new identity on every render, remounting the inputs (and
+// dropping focus after each keystroke).
+const L = ({ children }) => <label style={{ display: 'block', marginBottom: 4 }}>{children}</label>;
+const Row = ({ children }) => <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>{children}</div>;
+
 export default function NetworkFormModal({ editNet, onClose, onDone }) {
   const toast = useToast();
   const [form, setForm] = useState(EMPTY);
@@ -82,9 +88,6 @@ export default function NetworkFormModal({ editNet, onClose, onDone }) {
       onDone?.(); onClose();
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
-
-  const L = ({ children }) => <label style={{ display: 'block', marginBottom: 4 }}>{children}</label>;
-  const Row = ({ children }) => <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>{children}</div>;
 
   return (
     <Modal wide title={isEdit ? `Netzwerk bearbeiten · ${editNet.name}` : 'Netzwerk anlegen'} onClose={onClose}

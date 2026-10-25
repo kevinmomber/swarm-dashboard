@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
+import { nodesWithInterfaces, createNetworkFromSpec, describeNetwork, replaceNetwork, servicesUsing, nodeConfigs, deleteNetworkFully } from '../networkops.js';
 import { listVolumes, volumeUsage, volumeRemove, volumeCreate, volumeRename, volumeDuplicate, volumeExport, volumeImport, listBindMounts, migrateContainer, migrateService, migrationPreflight, volumeFsListOnNode, volumeFsReadOnNode, volumeFsOpOnNode } from '../cluster.js';
 
 const router = Router();
@@ -8,6 +9,8 @@ router.get('/networks', async (req, res, next) => {
   try {
     await requireManager();
     const nets = await docker.listNetworks();
+    // A swarm macvlan/ipvlan network reports IPv6 via its config-only network.
+    const cfgV6 = new Map(nets.filter((n) => n.ConfigOnly).map((n) => [n.Name, !!n.EnableIPv6]));
     res.json(
       nets.map((n) => ({
         id: n.Id,
@@ -17,6 +20,10 @@ router.get('/networks', async (req, res, next) => {
         internal: n.Internal,
         attachable: n.Attachable,
         ingress: n.Ingress || false,
+        ipv6: n.EnableIPv6 || cfgV6.get(n.ConfigFrom?.Network) || false,
+        configOnly: n.ConfigOnly || false,
+        configFrom: n.ConfigFrom?.Network || null,
+        managed: n.Labels?.['swarmdash.managed'] === 'true' || (!!n.ConfigFrom?.Network && n.ConfigFrom.Network === `${n.Name}-cfg`),
         stack: n.Labels?.['com.docker.stack.namespace'] || null,
       }))
     );
@@ -25,26 +32,35 @@ router.get('/networks', async (req, res, next) => {
   }
 });
 
+/** Swarm nodes with their physical interfaces (parent picker + LAN hints). */
+router.get('/networks/nodes', async (req, res, next) => {
+  try { res.json(await nodesWithInterfaces()); } catch (err) { next(err); }
+});
+
+/** Create a network (overlay / macvlan / ipvlan). */
+router.post('/networks', async (req, res) => {
+  try { res.status(201).json(await createNetworkFromSpec(req.body || {})); }
+  catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+
+/** Editable definition of an existing network. */
+router.get('/networks/:id/spec', async (req, res, next) => {
+  try { res.json(await describeNetwork(req.params.id)); } catch (err) { next(err); }
+});
+
+/** Edit = replace an unused network with a new definition (rollback on failure). */
+router.put('/networks/:id', async (req, res) => {
+  try { res.json(await replaceNetwork(req.params.id, req.body || {})); }
+  catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+
 /** Which swarm services and (cluster-wide) containers use a given network. */
 router.get('/networks/:id/usage', async (req, res, next) => {
   try {
     await requireManager();
     const netInfo = await docker.getNetwork(req.params.id).inspect();
     const netId = netInfo.Id;
-    const netName = netInfo.Name;
-
-    // Services attached to this network.
-    const services = await docker.listServices();
-    const usingServices = [];
-    for (const s of services) {
-      const nets = [
-        ...(s.Spec?.TaskTemplate?.Networks || []),
-        ...(s.Spec?.Networks || []),
-      ];
-      if (nets.some((n) => n.Target === netId)) {
-        usingServices.push({ id: s.ID, name: s.Spec.Name, stack: s.Spec?.Labels?.['com.docker.stack.namespace'] || null });
-      }
-    }
+    const usingServices = await servicesUsing(netId);
 
     // Containers attached (from the network's own container map).
     const containers = [];
@@ -53,16 +69,25 @@ router.get('/networks/:id/usage', async (req, res, next) => {
       containers.push({ id: cid, name: c.Name });
     }
 
-    const removable = usingServices.length === 0 && containers.length === 0 && !netInfo.Ingress;
-    const ipam = (netInfo.IPAM?.Config || []).map((c) => ({ subnet: c.Subnet || null, gateway: c.Gateway || null }));
+    const removable = usingServices.length === 0 && containers.length === 0 && !netInfo.Ingress
+      && !(['host', 'bridge', 'none'].includes(netInfo.Name) && ['host', 'bridge', 'null'].includes(netInfo.Driver));
+    const ipam = (netInfo.IPAM?.Config || []).map((c) => ({ subnet: c.Subnet || null, gateway: c.Gateway || null, ipRange: c.IPRange || null }));
+    const cfgName = netInfo.ConfigFrom?.Network || null;
+    const cfgs = cfgName ? await nodeConfigs(cfgName) : [];
     res.json({
       id: netId,
-      name: netName,
+      name: netInfo.Name,
       driver: netInfo.Driver,
       scope: netInfo.Scope,
       ingress: netInfo.Ingress || false,
       attachable: netInfo.Attachable || false,
       internal: netInfo.Internal || false,
+      ipv6: netInfo.EnableIPv6 || cfgs.some((c) => c.ipv6) || false,
+      configOnly: netInfo.ConfigOnly || false,
+      configFrom: cfgName,
+      managed: netInfo.Labels?.['swarmdash.managed'] === 'true' || (!!cfgName && cfgName === `${netInfo.Name}-cfg`),
+      options: netInfo.Options || {},
+      nodeConfigs: cfgs,
       ipam,
       services: usingServices,
       containers,
@@ -74,35 +99,17 @@ router.get('/networks/:id/usage', async (req, res, next) => {
   }
 });
 
-/** Delete a network (guarded: must be unused and not ingress). */
-router.delete('/networks/:id', async (req, res, next) => {
-  try {
-    await requireManager();
-    const netInfo = await docker.getNetwork(req.params.id).inspect();
-    if (netInfo.Ingress) return res.status(400).json({ error: 'Ingress-Netzwerk kann nicht entfernt werden' });
-
-    const services = await docker.listServices();
-    const inUseBySvc = services.some((s) => {
-      const nets = [...(s.Spec?.TaskTemplate?.Networks || []), ...(s.Spec?.Networks || [])];
-      return nets.some((n) => n.Target === netInfo.Id);
-    });
-    const attached = Object.keys(netInfo.Containers || {}).filter((c) => !c.startsWith('lb-'));
-    if (inUseBySvc || attached.length > 0) {
-      return res.status(409).json({ error: 'Netzwerk wird noch von Services/Containern verwendet' });
-    }
-    await docker.getNetwork(req.params.id).remove();
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
+/** Delete a network (guarded: must be unused and not ingress); also removes per-node config-only halves. */
+router.delete('/networks/:id', async (req, res) => {
+  try { res.json(await deleteNetworkFully(req.params.id)); }
+  catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
-
 router.get('/binds', async (req, res, next) => {
   try {
     res.json(await listBindMounts());
   } catch (err) { next(err); }
 });
-// Disk pre-check for a bind→volume migration (does the data node have room?).
+// Disk pre-check for a bindÃ¢â€ â€™volume migration (does the data node have room?).
 router.post('/migrate/preflight', async (req, res, next) => {
   try {
     const { kind, nodeId, source } = req.body || {};
@@ -283,7 +290,7 @@ router.get('/secrets', async (req, res, next) => {
 });
 
 // Create a new secret. Body: { name, dataB64 | data, labels }.
-// Note: a secret value can never be read back — this only writes it.
+// Note: a secret value can never be read back Ã¢â‚¬â€ this only writes it.
 router.post('/secrets', async (req, res, next) => {
   try {
     await requireManager();

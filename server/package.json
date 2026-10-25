@@ -1,6 +1,6 @@
 {
   "name": "swarm-dashboard-server",
-  "version": "1.58.0",
+  "version": "1.59.0",
   "description": "Backend for the Docker Swarm dashboard (Dockhand-like)",
   "author": "Swarm Dashboard",
   "type": "module",

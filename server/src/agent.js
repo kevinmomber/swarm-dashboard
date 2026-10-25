@@ -26,6 +26,7 @@ import { WebSocketServer } from 'ws';
 import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, containerStatsBatch, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
+import { listInterfaces, createConfigNetwork, getConfigNetwork, removeConfigNetwork } from './netlocal.js';
 
 const PORT = Number(process.env.AGENT_PORT) || 9787;
 const HOST_ROOT = process.env.HOST_ROOT || '/host';
@@ -317,6 +318,19 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/container-binds') {
       return json({ nodeId: NODE_ID, hostname: NODE_HOSTNAME, binds: await localContainerBinds() });
+    }
+    if (u.pathname === '/net-op' && req.method === 'POST') {
+      // Node-local network operations (config-only halves of macvlan/ipvlan
+      // swarm networks, interface discovery for the parent picker).
+      const b = await readJson(req);
+      const base = { nodeId: NODE_ID, hostname: NODE_HOSTNAME };
+      try {
+        if (b.op === 'interfaces') return json({ ...base, ...(await listInterfaces()) });
+        if (b.op === 'config-get') return json({ ...base, config: await getConfigNetwork(b.name) });
+        if (b.op === 'config-create') return json({ ...base, ...(await createConfigNetwork(b)) });
+        if (b.op === 'config-remove') return json({ ...base, ...(await removeConfigNetwork(b.name)) });
+      } catch (e) { res.statusCode = 400; return json({ ...base, error: e.message }); }
+      res.statusCode = 400; return json({ error: 'Unbekannte Operation' });
     }
     if (u.pathname === '/container-state') {
       const id = u.searchParams.get('id');

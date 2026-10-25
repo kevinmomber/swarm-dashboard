@@ -4,6 +4,7 @@ import { useApi } from '../components/useApi.js';
 import { Badge, short, ago, bytes, Modal, useToast, usePersistentState, Copy } from '../components/ui.jsx';
 import TabBar from '../components/TabBar.jsx';
 import FileBrowser from '../components/FileBrowser.jsx';
+import NetworkFormModal from '../components/NetworkFormModal.jsx';
 
 const TABS = [
   { key: 'networks', label: 'Netzwerke' },
@@ -13,7 +14,7 @@ const TABS = [
   { key: 'configs', label: 'Configs' },
 ];
 
-function NetworkDetail({ net, onClose, onDeleted }) {
+function NetworkDetail({ net, onClose, onDeleted, onEdit }) {
   const toast = useToast();
   const [usage, setUsage] = useState(null);
   const [err, setErr] = useState(null);
@@ -27,16 +28,21 @@ function NetworkDetail({ net, onClose, onDeleted }) {
   const del = async () => {
     setBusy(true);
     try {
-      await api.del(`/networks/${net.id}`);
-      toast(`Netzwerk "${net.name}" entfernt`);
+      const r = await api.del(`/networks/${net.id}`);
+      const cleaned = r?.configCleaned?.length ? ` (config-only auf ${r.configCleaned.join(', ')} entfernt)` : '';
+      toast(`Netzwerk "${net.name}" entfernt${cleaned}`);
       onDeleted(); onClose();
     } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
   };
+
+  const editable = usage && !usage.ingress && usage.scope === 'swarm' && !usage.configOnly
+    && ['overlay', 'macvlan', 'ipvlan'].includes(usage.driver) && !net.stack;
 
   return (
     <Modal title={`Netzwerk · ${net.name}`} onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>Schließen</button>
+        {editable && <button className="btn" disabled={busy || !usage?.removable} title={usage?.removable ? '' : 'Erst alle Services/Container trennen'} onClick={() => { onClose(); onEdit(net); }}>Bearbeiten</button>}
         <button className="btn danger" disabled={busy || !usage?.removable || !confirmChk} onClick={del}>Netzwerk löschen</button>
       </>}>
       {err && <div className="banner">{err}</div>}
@@ -50,15 +56,38 @@ function NetworkDetail({ net, onClose, onDeleted }) {
               <tr><td>Scope</td><td className="mono">{usage.scope}</td></tr>
               <tr><td>Attachable</td><td>{usage.attachable ? 'ja' : 'nein'}</td></tr>
               <tr><td>Internal</td><td>{usage.internal ? 'ja' : 'nein'}</td></tr>
+              <tr><td>IPv6</td><td>{usage.ipv6 ? 'ja' : 'nein'}</td></tr>
+              {usage.configFrom && <tr><td>Config-only Netzwerk</td><td className="mono">{usage.configFrom}</td></tr>}
+              {usage.managed && <tr><td>Verwaltet von</td><td><Badge kind="info">Swarm Dashboard</Badge></td></tr>}
               {(usage.ipam || []).map((c, i) => (
                 <tr key={i}>
-                  <td>IPv4 Subnet / Gateway{usage.ipam.length > 1 ? ` (${i + 1})` : ''}</td>
-                  <td className="mono">{c.subnet || '–'}{c.gateway ? ` · GW ${c.gateway}` : ''}</td>
+                  <td>{(c.subnet || '').includes(':') ? 'IPv6' : 'IPv4'} Subnet / Gateway{usage.ipam.length > 1 ? ` (${i + 1})` : ''}</td>
+                  <td className="mono">{c.subnet || '–'}{c.gateway ? ` · GW ${c.gateway}` : ''}{c.ipRange ? ` · Bereich ${c.ipRange}` : ''}</td>
                 </tr>
               ))}
               {usage.ingress && <tr><td>Typ</td><td><Badge kind="info">Ingress</Badge></td></tr>}
             </tbody>
           </table>
+
+          {usage.nodeConfigs?.length > 0 && (
+            <>
+              <label>Konfiguration pro Node</label>
+              <table style={{ marginBottom: 12 }}>
+                <thead><tr><th>Node</th><th>Parent</th><th>Bereich</th></tr></thead>
+                <tbody>
+                  {usage.nodeConfigs.map((c) => (
+                    <tr key={c.nodeId}>
+                      <td>{c.hostname}</td>
+                      <td className="mono">{c.parent || '–'}{c.macvlanMode ? ` (${c.macvlanMode})` : ''}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {(c.ipam || []).map((x) => x.IPRange || x.Subnet).filter(Boolean).join(' · ') || '–'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
 
           <label>Verwendende Services</label>
           {usage.services.length === 0 ? <div className="help" style={{ marginBottom: 8 }}>keine</div> : (
@@ -865,6 +894,8 @@ export default function Resources() {
   const [tab, setTab] = usePersistentState('resources.tab', 'networks');
   const { data, error, loading, reload } = useApi(`/${tab}`, { poll: 10000 });
   const [netDetail, setNetDetail] = useState(null);
+  const [netForm, setNetForm] = useState(null); // { create: true } | network row to edit
+  const [netQ, setNetQ] = useState('');
   const [volDetail, setVolDetail] = useState(null);
   const [migRow, setMigRow] = useState(null);
   const [volNode, setVolNode] = usePersistentState('resources.volNode', 'all');
@@ -884,6 +915,9 @@ export default function Resources() {
 
   const stackCol = (row) => (row.stack ? <Badge kind="muted">{row.stack}</Badge> : '–');
 
+  const netRows = tab === 'networks'
+    ? (data || []).filter((n) => !netQ || n.name.toLowerCase().includes(netQ.toLowerCase()) || (n.driver || '').toLowerCase().includes(netQ.toLowerCase()))
+    : [];
   const volNodes = tab === 'volumes' ? [...new Set((data || []).map((v) => v.node).filter(Boolean))].sort() : [];
   const volRows = tab === 'volumes'
     ? (data || [])
@@ -999,6 +1033,15 @@ export default function Resources() {
         </div>
       )}
 
+      {tab === 'networks' && (
+        <div className="toolbar" style={{ flexWrap: 'wrap' }}>
+          <input style={{ maxWidth: 280 }} value={netQ} onChange={(e) => setNetQ(e.target.value)} placeholder="🔍 Netzwerk filtern…" />
+          {netQ && <button className="btn sm" onClick={() => setNetQ('')}>✕</button>}
+          <div className="spacer" />
+          <button className="btn primary" onClick={() => setNetForm({ create: true })}>＋ Netzwerk anlegen</button>
+        </div>
+      )}
+
       {tab === 'configs' && (
         <div className="toolbar" style={{ flexWrap: 'wrap' }}>
           <div className="spacer" />
@@ -1015,16 +1058,20 @@ export default function Resources() {
           <table>
             {tab === 'networks' && (
               <>
-                <thead><tr><th>Name</th><th>Driver</th><th>Scope</th><th>Attachable</th><th>Stack</th><th>Aktion</th></tr></thead>
+                <thead><tr><th>Name</th><th>Driver</th><th>Scope</th><th>IPv6</th><th>Attachable</th><th>Stack</th><th>Aktion</th></tr></thead>
                 <tbody>
-                  {data.map((n) => (
+                  {netRows.length === 0 && <tr><td colSpan={7} className="empty" style={{ padding: 18 }}>Keine Treffer.</td></tr>}
+                  {netRows.map((n) => (
                     <tr key={n.id}>
                       <td style={{ fontWeight: 600 }}>
-                        <span className="link-name" onClick={() => setNetDetail(n)} title="Nutzung anzeigen">{n.name}</span>
+                        <span className="link-name" onClick={() => setNetDetail(n)} title="Details / Nutzung anzeigen">{n.name}</span>
                         {n.ingress && <> <Badge kind="info">ingress</Badge></>}
+                        {n.configOnly && <> <Badge kind="muted">config-only</Badge></>}
+                        {n.managed && <> <Badge kind="info">verwaltet</Badge></>}
                       </td>
                       <td className="mono">{n.driver}</td>
                       <td>{n.scope}</td>
+                      <td>{n.ipv6 ? 'ja' : '–'}</td>
                       <td>{n.attachable ? 'ja' : 'nein'}</td>
                       <td>{stackCol(n)}</td>
                       <td><button className="btn sm" onClick={() => setNetDetail(n)}>Details</button></td>
@@ -1139,7 +1186,8 @@ export default function Resources() {
         </div>
       )}
 
-      {netDetail && <NetworkDetail net={netDetail} onClose={() => setNetDetail(null)} onDeleted={reload} />}
+      {netDetail && <NetworkDetail net={netDetail} onClose={() => setNetDetail(null)} onDeleted={reload} onEdit={(n) => setNetForm(n)} />}
+      {netForm && <NetworkFormModal editNet={netForm.create ? null : netForm} onClose={() => setNetForm(null)} onDone={reload} />}
       {volDetail && <VolumeDetail vol={volDetail} onClose={() => setVolDetail(null)} onChanged={reload} />}
       {migRow && <MigrationModal row={migRow} onClose={() => setMigRow(null)} onDone={reload} />}
       {cfgDetail && <ConfigDetail cfg={cfgDetail} onClose={() => setCfgDetail(null)} onDeleted={reload} />}

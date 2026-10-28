@@ -13,7 +13,7 @@
  */
 import { docker, requireManager } from './docker.js';
 import { agentBaseForNode } from './metrics.js';
-import { listInterfaces, createConfigNetwork, getConfigNetwork, removeConfigNetwork } from './netlocal.js';
+import { listInterfaces, createConfigNetwork, getConfigNetwork, removeConfigNetwork, containerNetworks } from './netlocal.js';
 
 const RESERVED = new Set(['host', 'bridge', 'none', 'ingress', 'docker_gwbridge']);
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
@@ -50,8 +50,34 @@ async function nodeOp(node, op, payload = {}) {
     if (op === 'config-get') return { config: await getConfigNetwork(payload.name) };
     if (op === 'config-create') return createConfigNetwork(payload);
     if (op === 'config-remove') return removeConfigNetwork(payload.name);
+    if (op === 'container-nets') return { nets: await containerNetworks(payload.ids || []) };
   }
   throw new Error(`${node.hostname}: kein Agent erreichbar`);
+}
+
+/**
+ * Actual per-network addresses of containers, read on their own node. Needed for
+ * macvlan/ipvlan networks, which swarm does not list in task network attachments.
+ * @param items [{ nodeId, containerId }]  -> { [containerId]: { [networkName]: { ip, ip6, mac } } | null }
+ */
+export async function containerNetworksOnNodes(items = []) {
+  await requireManager();
+  const nodes = await swarmNodes();
+  const byNode = new Map();
+  for (const it of items) {
+    if (!it.containerId) continue;
+    if (!byNode.has(it.nodeId)) byNode.set(it.nodeId, []);
+    byNode.get(it.nodeId).push(it.containerId);
+  }
+  const out = {};
+  await Promise.all([...byNode.entries()].map(async ([nodeId, ids]) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    try {
+      if (!node) throw new Error('node unknown');
+      Object.assign(out, (await nodeOp(node, 'container-nets', { ids })).nets || {});
+    } catch { for (const id of ids) out[id] = null; }
+  }));
+  return out;
 }
 
 export async function swarmNodes() {

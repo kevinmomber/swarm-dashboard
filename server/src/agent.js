@@ -26,7 +26,7 @@ import { WebSocketServer } from 'ws';
 import { exportVolume, importVolume, volumeSize, migrationDiskProbe, volumeCopyLocal } from './volarchive.js';
 import { containerState, recreateWithVolume, containerConfig, recreateContainer, containerTop, containerStatsBatch, imageHistory, fsList, fsRead, fsOp, volumeFsList, volumeFsRead, volumeFsOp } from './containerops.js';
 import { scanImageLocal } from './security.js';
-import { listInterfaces, createConfigNetwork, getConfigNetwork, removeConfigNetwork } from './netlocal.js';
+import { listInterfaces, createConfigNetwork, getConfigNetwork, removeConfigNetwork, containerNetworks } from './netlocal.js';
 
 const PORT = Number(process.env.AGENT_PORT) || 9787;
 const HOST_ROOT = process.env.HOST_ROOT || '/host';
@@ -329,6 +329,7 @@ const server = http.createServer(async (req, res) => {
         if (b.op === 'config-get') return json({ ...base, config: await getConfigNetwork(b.name) });
         if (b.op === 'config-create') return json({ ...base, ...(await createConfigNetwork(b)) });
         if (b.op === 'config-remove') return json({ ...base, ...(await removeConfigNetwork(b.name)) });
+        if (b.op === 'container-nets') return json({ ...base, nets: await containerNetworks(Array.isArray(b.ids) ? b.ids : []) });
       } catch (e) { res.statusCode = 400; return json({ ...base, error: e.message }); }
       res.statusCode = 400; return json({ error: 'Unbekannte Operation' });
     }

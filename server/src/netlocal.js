@@ -119,6 +119,20 @@ export async function getConfigNetwork(name) {
   } catch { return null; }
 }
 
+/** Network name -> { ip, ip6, mac } for each given local container (docker inspect). */
+export async function containerNetworks(ids = []) {
+  const out = {};
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const i = await docker.getContainer(id).inspect();
+      out[id] = Object.fromEntries(Object.entries(i.NetworkSettings?.Networks || {}).map(([name, n]) => [
+        name, { ip: n.IPAddress || null, ip6: n.GlobalIPv6Address || null, mac: n.MacAddress || null },
+      ]));
+    } catch { out[id] = null; }
+  }));
+  return out;
+}
+
 /** Remove a config-only network (refuses anything else). */
 export async function removeConfigNetwork(name) {
   let n;

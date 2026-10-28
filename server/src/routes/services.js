@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { docker, requireManager } from '../docker.js';
 import { exportService, updateServiceLabels, resolveRunningContainer } from '../serviceops.js';
 import { migrateServiceToNode, containerStatsOnNodes, volumeSizeOnNode } from '../cluster.js';
+import { containerNetworksOnNodes } from '../networkops.js';
 import { PROXY_LABEL, GROUP_LABEL, BACKUP_LABEL } from '../settings.js';
 import { authConfigFor } from '../registryauth.js';
 
@@ -476,6 +477,8 @@ router.get('/:id/placement', async (req, res, next) => {
         timestamp: t.Status?.Timestamp,
         containerId: t.Status?.ContainerStatus?.ContainerID || null,
         node: nodeMap.get(t.NodeID) || { hostname: t.NodeID, role: '?', id: t.NodeID },
+        // Per-network addresses of this task (from swarm's network attachments).
+        addresses: Object.fromEntries((t.NetworksAttachments || []).map((a) => [a.Network?.ID, (a.Addresses || []).map((x) => String(x).split('/')[0])])),
       }))
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
 
@@ -484,6 +487,50 @@ router.get('/:id/placement', async (req, res, next) => {
       running.filter((t) => t.containerId).map((t) => ({ nodeId: t.node.id, containerId: t.containerId }))
     ).catch(() => ({}));
     for (const t of running) t.stats = (t.containerId && stats[t.containerId]) || null;
+
+    // Networks: those configured on the service plus whatever the tasks are really
+    // attached to (e.g. the implicit ingress network when ports are published).
+    const netIds = new Set([
+      ...(info.Spec?.TaskTemplate?.Networks || []).map((n) => n.Target),
+      ...(info.Spec?.Networks || []).map((n) => n.Target),
+      ...running.flatMap((t) => Object.keys(t.addresses)),
+    ].filter(Boolean));
+    const networks = (await Promise.all([...netIds].map(async (id) => {
+      try {
+        const n = await docker.getNetwork(id).inspect();
+        const cfgName = n.ConfigFrom?.Network || null;
+        return {
+          id: n.Id, name: n.Name, driver: n.Driver, scope: n.Scope, ingress: !!n.Ingress,
+          internal: !!n.Internal, ipv6: !!n.EnableIPv6, configFrom: cfgName,
+          subnets: (n.IPAM?.Config || []).map((c) => c.Subnet).filter(Boolean),
+          configured: (info.Spec?.TaskTemplate?.Networks || []).some((x) => x.Target === id),
+        };
+      } catch { return { id, name: id.slice(0, 12), driver: '?', scope: '?', configured: true, subnets: [] }; }
+    }))).sort((a, b) => (a.ingress - b.ingress) || a.name.localeCompare(b.name));
+    const cnets = await containerNetworksOnNodes(
+      running.filter((t) => t.containerId).map((t) => ({ nodeId: t.node.id, containerId: t.containerId }))
+    ).catch(() => ({}));
+    for (const t of running) {
+      t.networks = networks
+        .filter((n) => t.addresses[n.id]?.length || cnets[t.containerId]?.[n.name])
+        .map((n) => {
+          // Swarm attachments cover overlay networks; macvlan/ipvlan addresses come
+          // from the container itself.
+          const swarmIps = t.addresses[n.id] || [];
+          const c = cnets[t.containerId]?.[n.name];
+          const own = c ? [c.ip, c.ip6].filter(Boolean) : [];
+          return { id: n.id, addresses: swarmIps.length ? swarmIps : own, mac: c?.mac || null };
+        });
+      delete t.addresses;
+    }
+
+    // Configs / secrets assigned to the service. Names only – secret contents are
+    // never read here.
+    const cs = info.Spec?.TaskTemplate?.ContainerSpec || {};
+    const configs = (cs.Configs || []).map((c) => ({ name: c.ConfigName, target: c.File?.Name || null }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const secrets = (cs.Secrets || []).map((s) => ({ name: s.SecretName }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     // Named volumes mounted by the service, sized on a node that runs a task.
     const mounts = info.Spec?.TaskTemplate?.ContainerSpec?.Mounts || [];
@@ -498,7 +545,7 @@ router.get('/:id/placement', async (req, res, next) => {
         }))
     );
 
-    res.json({ service: name, tasks: running, volumes });
+    res.json({ service: name, tasks: running, volumes, networks, configs, secrets });
   } catch (err) {
     next(err);
   }

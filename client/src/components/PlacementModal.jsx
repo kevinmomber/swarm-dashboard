@@ -42,7 +42,7 @@ export default function PlacementModal({ service, onClose }) {
   const volumes = data?.volumes || [];
 
   return (
-    <Modal title={`Platzierung · ${service.name}`} onClose={onClose} wide
+    <Modal title={`Platzierung & Ressourcen · ${service.name}`} onClose={onClose} wide
       footer={<button className="btn" onClick={onClose}>Schließen</button>}>
       {err && <div className="banner">{err}</div>}
       {!data && !err && <div className="help">Lade Platzierung…</div>}
@@ -92,6 +92,79 @@ export default function PlacementModal({ service, onClose }) {
               </table>
             </>
           )}
+        </>
+      )}
+
+      {data && (
+        <>
+          <div className="help" style={{ margin: '16px 0 6px' }}>Netzwerke</div>
+          {(data.networks || []).length === 0 ? (
+            <div className="help">Keine Netzwerke zugeordnet.</div>
+          ) : (
+            <table>
+              <thead><tr><th>Netzwerk</th><th>Typ</th><th>Subnetz</th><th>Adresse(n)</th></tr></thead>
+              <tbody>
+                {data.networks.map((n) => {
+                  const perTask = data.tasks
+                    .map((t) => { const x = t.networks?.find((y) => y.id === n.id); return { slot: t.slot, ips: x?.addresses || [], mac: x?.mac || null }; })
+                    .filter((x) => x.ips.length);
+                  return (
+                    <tr key={n.id}>
+                      <td>
+                        <span style={{ fontWeight: 600 }}>{n.name}</span>
+                        {n.ingress && <> <Badge kind="info">ingress</Badge></>}
+                        {n.ipv6 && <> <Badge kind="muted">IPv6</Badge></>}
+                        {n.internal && <> <Badge kind="muted">internal</Badge></>}
+                        {!n.configured && !n.ingress && <> <Badge kind="muted">implizit</Badge></>}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>{n.driver}{n.scope && n.scope !== '?' ? ` · ${n.scope}` : ''}</td>
+                      <td className="mono" style={{ fontSize: 12, color: 'var(--text-dim)' }}>{(n.subnets || []).join(', ') || '–'}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {perTask.length === 0 ? <span style={{ color: 'var(--text-dim)' }}>–</span> : perTask.map((x) => (
+                          <div key={x.slot ?? x.ips[0]}>
+                            {data.tasks.length > 1 ? `#${x.slot ?? '?'} ` : ''}{x.ips.join(', ')}
+                            {x.mac && ['macvlan', 'ipvlan'].includes(n.driver) && <div style={{ color: 'var(--text-dim)', fontSize: 11 }}>MAC {x.mac}</div>}
+                          </div>
+                        ))}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 16 }}>
+            <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+              <div className="help" style={{ marginBottom: 6 }}>Configs</div>
+              {(data.configs || []).length === 0 ? <div className="help">keine</div> : (
+                <table>
+                  <thead><tr><th>Name</th><th>Pfad im Container</th></tr></thead>
+                  <tbody>
+                    {data.configs.map((c) => (
+                      <tr key={`${c.name}:${c.target}`}>
+                        <td className="mono" style={{ fontSize: 12 }}>{c.name}</td>
+                        <td className="mono" style={{ fontSize: 12, color: 'var(--text-dim)' }}>{c.target || '–'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+              <div className="help" style={{ marginBottom: 6 }}>Secrets <span style={{ opacity: 0.7 }}>(nur Name)</span></div>
+              {(data.secrets || []).length === 0 ? <div className="help">keine</div> : (
+                <table>
+                  <thead><tr><th>Name</th></tr></thead>
+                  <tbody>
+                    {data.secrets.map((s) => (
+                      <tr key={s.name}><td className="mono" style={{ fontSize: 12 }}>{s.name}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </>
       )}
     </Modal>

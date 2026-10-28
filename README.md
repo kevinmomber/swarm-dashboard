@@ -205,6 +205,26 @@ Der `docker-stack.yml`:
 - mountet `/var/run/docker.sock`,
 - veröffentlicht Port 3000.
 
+### Fertiges Image veröffentlichen (`latest`)
+
+Nach Build, Test und `git push` wird das fertige Image zusätzlich abgelegt:
+
+```powershell
+$env:GITEA_PW = '<Git-Mirror-Passwort>'      # wird nicht gespeichert; sonst Abfrage
+.\scripts\publish-image.ps1             # Version aus server/package.json
+```
+
+| Ziel | Ablage |
+|---|---|
+| **Git-Mirror** | Container-Registry `registry.example.com/admin/swarm-dashboard:latest` und `:<Version>` |
+| **GitHub** | Release `latest` mit dem Asset `swarm-dashboard-latest.tar` (`docker load -i …`) |
+
+Die Git-Mirror-Registry nutzt eine interne CA und ist vom Entwicklungsrechner nicht per Name erreichbar.
+Das Skript kopiert das Image deshalb mit `skopeo` aus einem Wegwerf-Container auf der Staging-Node
+(TLS-Prüfung nur für diese Übertragung aus); am Host wird nichts verändert. GitHub-Container-Registry
+(`ghcr.io`) ist nicht eingerichtet, da dafür der Token-Scope `write:packages` fehlt – der Release-Asset
+braucht nur den Scope `repo`. Parameter: `-SkipGit-Mirror`, `-SkipGitHub`, `-Version`.
+
 ---
 
 ## Konfiguration (Umgebungsvariablen)

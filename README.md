@@ -1,6 +1,6 @@
 # Swarm Dashboard
 
-Ein Web-Frontend zur Verwaltung eines **Docker Swarm** —
+Ein Web-Frontend zur Verwaltung von **Docker Swarm** —
 Übersicht, Nodes, Services (skalieren / aktualisieren / entfernen), Stacks
 (deployen / entfernen), Tasks, Ressourcen und **Live-Logs**.
 

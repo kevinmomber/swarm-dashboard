@@ -16,19 +16,18 @@ WebSocket (Logs, Konsole, Ereignisse) · `node:sqlite` (Metrik-/Scan-Verläufe).
 [Schnellstart](#schnellstart-fertiges-image-aus-github) ·
 [Features](#features) ·
 [Bereiche im Detail](#bereiche-im-detail) ·
-[Entwicklung](#entwicklung) ·
 [Image bauen & veröffentlichen](#image-bauen--veröffentlichen) ·
 [Konfiguration](#konfiguration) ·
 [API](#api) ·
-[Sicherheit](#sicherheitshinweis)
+[Sicherheit](#sicherheitshinweis) ·
+[Lizenz](#lizenz)
 
 ---
 
 ## Schnellstart: fertiges Image aus GitHub
 
-Jedes Release wird zusätzlich als **fertiges Image** abgelegt: im GitHub-Release **`latest`**
-(Assets `swarm-dashboard-latest.tar` und `docker-stack.yml`) sowie in der Git-Mirror-Registry
-(`registry.example.com/admin/swarm-dashboard:latest`). Ein Klonen und Bauen ist nicht nötig.
+Jedes Release wird zusätzlich als **fertiges Image** im GitHub-Release **`latest`** abgelegt
+(Assets `swarm-dashboard-latest.tar` und `docker-stack.yml`). Ein Klonen und Bauen ist nicht nötig.
 
 **Voraussetzungen:** ein Docker-Swarm mit mindestens einem Manager, Zugriff auf den Manager
 (`docker`-CLI oder Docker-Context) und — da das Repository **privat** ist — die
@@ -61,18 +60,21 @@ SWARMDASH_PORT=8080 docker stack deploy --resolve-image=never -c docker-stack.ym
 # PowerShell:  $env:SWARMDASH_PORT = '8080'; docker stack deploy ...
 ```
 
-### Variante B — Image aus einer Registry ziehen (Git-Mirror)
+### Variante B — Image aus einer eigenen Registry ziehen
+
+Das Image aus Variante A (Schritt 1–2) lässt sich auf einem Rechner mit Zugriff auf Ihre Registry laden,
+neu taggen (`docker tag swarm-dashboard:latest <registry>/swarm-dashboard:latest`) und pushen. Danach:
 
 ```bash
-docker login registry.example.com -u <benutzer>
-SWARMDASH_IMAGE=registry.example.com/admin/swarm-dashboard:latest \
+docker login <registry> -u <benutzer>
+SWARMDASH_IMAGE=<registry>/swarm-dashboard:latest \
   docker stack deploy --with-registry-auth -c docker-stack.yml swarmdash
 ```
 
 Die Variable `SWARMDASH_IMAGE` gilt für Dashboard **und** Agent und wird automatisch auch als
-`HELPER_IMAGE` gesetzt (Hilfs-Container für Volume-Kopien). Die Registry nutzt eine **interne CA**:
-deren Zertifikat muss auf **jedem Node** im Docker-Daemon vertraut werden
-(`/etc/docker/certs.d/registry.example.com/ca.crt`), sonst scheitert der Pull mit
+`HELPER_IMAGE` gesetzt (Hilfs-Container für Volume-Kopien). Verwendet die Registry eine **interne CA**, muss
+deren Zertifikat auf **jedem Node** im Docker-Daemon vertraut werden
+(`/etc/docker/certs.d/<registry>/ca.crt`), sonst scheitert der Pull mit
 `x509: certificate signed by unknown authority`.
 
 ### Erster Start
@@ -319,31 +321,6 @@ Image und kann den **Dashboard-Service selbst aktualisieren** (rollend, start-fi
 
 ---
 
-## Entwicklung
-
-Zwei Terminals — das Backend spricht mit dem Docker/Swarm-Endpoint, das Frontend läuft über Vite mit Proxy.
-
-```powershell
-# Terminal 1 – Backend (Port 3000)
-cd server
-npm install
-$env:DOCKER_HOST = "tcp://<manager-ip>:2375"     # optional: Remote-Manager
-npm run dev
-
-# Terminal 2 – Frontend (Port 5173, proxyt /api und /ws auf :3000)
-cd client
-npm install
-npm run dev
-```
-
-Anschließend <http://localhost:5173> öffnen. Die lokale Maschine muss kein Swarm-Manager sein: Verwaltungsaktionen
-funktionieren, sobald das Backend über `DOCKER_HOST` mit einem **Manager-Node** verbunden ist (sonst Hinweis und
-nur Basisinformationen).
-
-Der Agent läuft lokal mit `node server/src/agent.js` (`AGENT_PORT`, `HOST_ROOT`, `NODE_ID`, `NODE_HOSTNAME`).
-
----
-
 ## Image bauen & veröffentlichen
 
 ```bash
@@ -369,21 +346,13 @@ Wiedervorlage in `.trivyignore`.
 Nach Build, Test und `git push`:
 
 ```powershell
-$env:GITEA_PW = '<Git-Mirror-Passwort>'      # wird nicht gespeichert; sonst Abfrage
 .\scripts\publish-image.ps1             # Version aus server/package.json
 ```
 
-| Ziel | Ablage |
-|------|--------|
-| **Git-Mirror** | Container-Registry `registry.example.com/admin/swarm-dashboard:latest` und `:<version>` |
-| **GitHub** | Release `latest` mit `swarm-dashboard-latest.tar` (`docker load -i …`) und `docker-stack.yml` |
-
-Die Git-Mirror-Registry nutzt eine interne CA und ist vom Entwicklungsrechner nicht per Name erreichbar; das Skript
-kopiert das Image deshalb mit `skopeo` aus einem Wegwerf-Container auf der Staging-Node (TLS-Prüfung nur für
-diese Übertragung aus, am Host wird nichts verändert). Die GitHub-Container-Registry (`ghcr.io`) ist nicht
-eingerichtet, da dafür der Token-Scope `write:packages` fehlt. Parameter: `-SkipGit-Mirror`, `-SkipGitHub`, `-Version`.
-
-`git push origin` aktualisiert GitHub **und** Git-Mirror (zwei Push-URLs).
+Das Skript legt das Image als Release **`latest`** auf GitHub ab (`swarm-dashboard-latest.tar` zum Laden mit
+`docker load -i …` und `docker-stack.yml`) und kann es zusätzlich in eine interne Container-Registry kopieren
+(Parameter im Skriptkopf; `-SkipGitHub` bzw. `-SkipGit-Mirror` lassen ein Ziel aus). Die GitHub-Container-Registry
+(`ghcr.io`) ist nicht eingerichtet, da dafür der Token-Scope `write:packages` fehlt.
 
 ---
 
@@ -461,12 +430,22 @@ Alle Pfade unter `/api`; bei aktivierter Anmeldung mit `Authorization: Bearer <t
 ## Sicherheitshinweis
 
 Dieses Werkzeug gewährt vollen Zugriff auf den Docker-Socket des Managers und — über die Agents — auf den
-Socket jedes Nodes (= **Root-Äquivalent** auf den Hosts). Die Anmeldung ist **optional und standardmäßig
-ausgeschaltet**; ohne sie kann jeder, der den Port erreicht, den Cluster verwalten.
+Socket jedes Nodes (= **Root-Äquivalent** auf den Hosts). **Nach dem Deployment ist keine Authentifizierung aktiv**:
+sie ist optional und muss nach dem ersten Start konfiguriert werden (*Einstellungen → Authentifizierung*).
+Bis dahin kann jeder, der den Port erreicht, den Cluster verwalten.
+
+Für alle veröffentlichten Services — **einschließlich des Swarm Dashboards selbst** — wird ein Reverse Proxy mit
+Authentifizierung (z. B. Traefik + Basic-Auth, OAuth oder mTLS) **dringend empfohlen**.
 
 - Betreiben Sie das Dashboard nur in einem vertrauenswürdigen, nicht öffentlich erreichbaren Netz oder hinter
-  einem Reverse Proxy mit Authentifizierung (Traefik + mTLS/Basic-Auth/OAuth).
+  einem Reverse Proxy mit Authentifizierung.
 - Aktivieren Sie die **Authentifizierung** und verwenden Sie `operator`/`viewer` für alltägliche Zugriffe.
 - Das Datenverzeichnis enthält Benutzer-Hashes, CA-Schlüssel und den verschlüsselten Secret-Tresor — nicht teilen.
 - Wer nur Metriken möchte, kann den Docker-Socket-Mount des Agents im Stack entfernen (dann entfallen Konsole,
   Export und node-lokale Funktionen).
+
+---
+
+## Lizenz
+
+MIT — siehe [LICENSE](LICENSE).

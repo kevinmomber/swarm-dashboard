@@ -1,11 +1,17 @@
 # Deploy on a Swarm manager:  docker stack deploy -c docker-stack.yml swarmdash
+#
+# Variablen (optional, werden von `docker stack deploy` aus der Umgebung ersetzt):
+#   SWARMDASH_IMAGE  Image fuer Dashboard UND Agent   (Standard: swarm-dashboard:latest)
+#   SWARMDASH_PORT   veroeffentlichter Port           (Standard: 3000)
+# Beispiel Registry:  SWARMDASH_IMAGE=registry.example.com/admin/swarm-dashboard:latest \
+#                     docker stack deploy --with-registry-auth -c docker-stack.yml swarmdash
 version: "3.8"
 
 services:
   dashboard:
-    image: swarm-dashboard:latest
+    image: ${SWARMDASH_IMAGE:-swarm-dashboard:latest}
     ports:
-      - "3000:3000"
+      - "${SWARMDASH_PORT:-3000}:3000"
     volumes:
       # Mount the manager's Docker socket so the app can talk to the Swarm API.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -14,6 +20,8 @@ services:
     environment:
       - PORT=3000
       - DATA_DIR=/data
+      # Helper containers (volume copy/size/export) reuse this image - it is present on every node.
+      - HELPER_IMAGE=${SWARMDASH_IMAGE:-swarm-dashboard:latest}
       # Node-agent discovery (matches the agent's network alias below).
       - AGENT_SERVICE=swarmdash-agent
       - AGENT_PORT=9787
@@ -31,11 +39,12 @@ services:
 
   # Global node agent — one per node — reports real host CPU/RAM/disk.
   agent:
-    image: swarm-dashboard:latest
+    image: ${SWARMDASH_IMAGE:-swarm-dashboard:latest}
     command: ["node", "server/src/agent.js"]
     environment:
       - AGENT_PORT=9787
       - HOST_ROOT=/host
+      - HELPER_IMAGE=${SWARMDASH_IMAGE:-swarm-dashboard:latest}
       - NODE_ID={{.Node.ID}}
       - NODE_HOSTNAME={{.Node.Hostname}}
     volumes:

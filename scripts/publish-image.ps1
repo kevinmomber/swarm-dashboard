@@ -99,6 +99,9 @@ if (-not $SkipGitHub) {
   }
   $tmp = Join-Path ([IO.Path]::GetTempPath()) 'swarm-dashboard-latest.tar'
   Copy-Item $tar $tmp -Force
-  try { gh release upload latest $tmp --repo $GitHubRepo --clobber; Assert-Native 'GitHub-Upload' } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
-  Write-Host "GitHub: Release 'latest' mit swarm-dashboard-latest.tar" -ForegroundColor Green
+  try { gh release upload latest $tmp --repo $GitHubRepo --clobber; Assert-Native 'GitHub-Upload (Image)' } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  # Stack file next to the image, so the quick start needs no repository clone.
+  gh release upload latest (Join-Path $root 'docker-stack.yml') --repo $GitHubRepo --clobber
+  Assert-Native 'GitHub-Upload (docker-stack.yml)'
+  Write-Host "GitHub: Release 'latest' mit swarm-dashboard-latest.tar + docker-stack.yml" -ForegroundColor Green
 }

@@ -1,34 +1,47 @@
 <#
 .SYNOPSIS
-  Publishes the finished swarm-dashboard image (tag latest + version) to
-  Git-Mirror (container registry) and GitHub (release asset on the "latest" tag).
+  Publishes the finished swarm-dashboard image (tag latest + version) as a GitHub
+  release asset and, optionally, to a container registry.
 
 .DESCRIPTION
   Run after a build + git push. Requires the local images swarm-dashboard:<version>
   and swarm-dashboard:latest.
 
-  Git-Mirror:  The staging daemon cannot verify the registry certificate (internal CA)
-          and the dev machine cannot resolve registry.example.com, so the image is
-          copied with skopeo from a throw-away container on the staging node
-          (reads the daemon's image, TLS verification off for this one transfer).
-          Nothing is changed on the host.
-  GitHub: Uploads a docker-loadable tarball as asset of the release "latest"
-          (needs only the gh "repo" scope). ghcr.io would need write:packages.
+  GitHub:   Uploads a docker-loadable tarball (swarm-dashboard-latest.tar) and the
+            docker-stack.yml as assets of the release "latest" (needs only the gh
+            "repo" scope; ghcr.io would need write:packages).
 
-  Secrets: the Git-Mirror password is never stored. Pass it via $env:GITEA_PW or
-           enter it when prompted.
+  Registry: Optional. Set -RegistryHost / -RegistryRepo (or the environment variables
+            PUBLISH_REGISTRY_HOST / PUBLISH_REGISTRY_REPO / PUBLISH_REGISTRY_USER /
+            PUBLISH_REGISTRY_CONTEXT). Without a host this step is skipped.
+            The image is copied with skopeo from a throw-away container on the
+            Docker host selected by -RegistryContext, i.e. a host that can reach the
+            registry and trusts its certificate. This is useful when the registry
+            uses a private CA that the development machine cannot resolve or verify
+            (TLS verification is switched off for this single transfer only).
+
+  Secrets:  The registry password is never stored. Pass it via
+            $env:PUBLISH_REGISTRY_PW or enter it when prompted.
 
 .EXAMPLE
-  $env:GITEA_PW = '...' ; .\scripts\publish-image.ps1
+  .\scripts\publish-image.ps1 -SkipRegistry
+
+.EXAMPLE
+  $env:PUBLISH_REGISTRY_HOST = 'registry.example.com'
+  $env:PUBLISH_REGISTRY_REPO = 'team/swarm-dashboard'
+  $env:PUBLISH_REGISTRY_USER = 'ci'
+  $env:PUBLISH_REGISTRY_CONTEXT = 'my-docker-host'
+  $env:PUBLISH_REGISTRY_PW = '...'
+  .\scripts\publish-image.ps1
 #>
 param(
   [string]$Version,
-  [string]$Git-MirrorHost = 'registry.example.com',
-  [string]$Git-MirrorRepo = 'admin/swarm-dashboard',
-  [string]$Git-MirrorUser = 'admin',
-  [string]$StagingContext = 'staging',
-  [string]$GitHubRepo = 'kevinmomber/swarm-dashboard',
-  [switch]$SkipGit-Mirror,
+  [string]$RegistryHost = $env:PUBLISH_REGISTRY_HOST,
+  [string]$RegistryRepo = $env:PUBLISH_REGISTRY_REPO,
+  [string]$RegistryUser = $env:PUBLISH_REGISTRY_USER,
+  [string]$RegistryContext = $env:PUBLISH_REGISTRY_CONTEXT,
+  [string]$GitHubRepo,
+  [switch]$SkipRegistry,
   [switch]$SkipGitHub
 )
 $ErrorActionPreference = 'Continue'   # native tools write to stderr on expected misses; exit codes are checked explicitly
@@ -38,6 +51,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 if (-not $Version) { $Version = (Get-Content server\package.json -Raw | ConvertFrom-Json).version }
+if (-not $GitHubRepo) { $GitHubRepo = (gh repo view --json nameWithOwner --jq .nameWithOwner 2>$null) }
 Write-Host "Publishing swarm-dashboard $Version (+ latest)" -ForegroundColor Cyan
 
 foreach ($t in @($Version, 'latest')) {
@@ -53,18 +67,23 @@ if (-not (Test-Path $tar)) {
   docker save "swarm-dashboard:$Version" swarm-dashboard:latest -o $tar
 }
 
-# ---------------------------------------------------------------- Git-Mirror
-if (-not $SkipGit-Mirror) {
-  $pw = $env:GITEA_PW
+# ------------------------------------------------------------- Registry
+if ($SkipRegistry -or -not $RegistryHost) {
+  Write-Host 'Registry: uebersprungen (kein -RegistryHost / PUBLISH_REGISTRY_HOST)' -ForegroundColor DarkGray
+} else {
+  if (-not $RegistryRepo -or -not $RegistryUser -or -not $RegistryContext) {
+    throw 'Fuer die Registry werden -RegistryRepo, -RegistryUser und -RegistryContext benoetigt.'
+  }
+  $pw = $env:PUBLISH_REGISTRY_PW
   if (-not $pw) {
-    $sec = Read-Host "Git-Mirror-Passwort fuer $Git-MirrorUser" -AsSecureString
+    $sec = Read-Host "Registry-Passwort fuer $RegistryUser" -AsSecureString
     $pw = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
   }
-  # Make sure the staging daemon has exactly this image.
-  $remoteId = docker --context $StagingContext image inspect "swarm-dashboard:$Version" --format '{{.Id}}' 2>$null
+  # Make sure the Docker host used for the transfer has exactly this image.
+  $remoteId = docker --context $RegistryContext image inspect "swarm-dashboard:$Version" --format '{{.Id}}' 2>$null
   if ($remoteId -ne $idV) {
-    Write-Host "Lade Image auf $StagingContext ..." -ForegroundColor Yellow
-    docker --context $StagingContext load -i $tar | Out-Null
+    Write-Host "Lade Image auf $RegistryContext ..." -ForegroundColor Yellow
+    docker --context $RegistryContext load -i $tar | Out-Null
   }
   $sh = @'
 set -e
@@ -77,11 +96,11 @@ done
   $env:REG_PW = $pw
   $env:SCRIPT_B64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($sh -replace "`r`n", "`n")))
   try {
-    docker --context $StagingContext run --rm -e REG_PW -e SCRIPT_B64 -e "REG_USER=$Git-MirrorUser" -e "REG=$Git-MirrorHost" -e "REPO=$Git-MirrorRepo" -e "TAGS=latest $Version" `
+    docker --context $RegistryContext run --rm -e REG_PW -e SCRIPT_B64 -e "REG_USER=$RegistryUser" -e "REG=$RegistryHost" -e "REPO=$RegistryRepo" -e "TAGS=latest $Version" `
       -v /var/run/docker.sock:/var/run/docker.sock alpine sh -c 'echo $SCRIPT_B64 | base64 -d > /p.sh && sh /p.sh'
-    if ($LASTEXITCODE -ne 0) { throw 'Git-Mirror-Push fehlgeschlagen' }
+    if ($LASTEXITCODE -ne 0) { throw 'Registry-Push fehlgeschlagen' }
   } finally { Remove-Item Env:\REG_PW, Env:\SCRIPT_B64 -ErrorAction SilentlyContinue }
-  Write-Host "Git-Mirror: $Git-MirrorHost/${Git-MirrorRepo}:latest und :$Version" -ForegroundColor Green
+  Write-Host "Registry: $RegistryHost/${RegistryRepo}:latest und :$Version" -ForegroundColor Green
 }
 
 # --------------------------------------------------------------- GitHub

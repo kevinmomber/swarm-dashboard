@@ -18,3 +18,8 @@ build-deps/
 .vscode/
 .idea/
 Thumbs.db
+
+# interne Arbeitsdateien (lokal behalten)
+DEVLOG.md
+plan.md
+docs/

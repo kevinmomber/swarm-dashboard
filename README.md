@@ -29,16 +29,16 @@ WebSocket (Logs, Konsole, Ereignisse) · `node:sqlite` (Metrik-/Scan-Verläufe).
 Jedes Release wird zusätzlich als **fertiges Image** im GitHub-Release **`latest`** abgelegt
 (Assets `swarm-dashboard-latest.tar` und `docker-stack.yml`). Ein Klonen und Bauen ist nicht nötig.
 
-**Voraussetzungen:** ein Docker-Swarm mit mindestens einem Manager, Zugriff auf den Manager
-(`docker`-CLI oder Docker-Context) und — da das Repository **privat** ist — die
-[GitHub CLI](https://cli.github.com/) (`gh auth login`) bzw. ein Token mit Leserecht auf das Repo.
+**Voraussetzungen:** ein Docker-Swarm mit mindestens einem Manager und Zugriff auf den Manager
+(`docker`-CLI oder Docker-Context). Die Release-Dateien sind öffentlich und ohne Anmeldung ladbar.
 
 ### Variante A — Image aus dem GitHub-Release laden
 
 ```bash
 # 1) Release-Dateien herunterladen (Image-Tarball + Stack-Datei)
-gh release download latest --repo kevinmomber/swarm-dashboard \
-  --pattern "swarm-dashboard-latest.tar" --pattern "docker-stack.yml"
+BASE=https://github.com/kevinmomber/swarm-dashboard/releases/download/latest
+curl -LO $BASE/swarm-dashboard-latest.tar
+curl -LO $BASE/docker-stack.yml
 
 # 2) Image auf JEDEM Swarm-Node laden (Manager und Worker). Der Node-Agent läuft als
 #    globaler Service auf allen Nodes und braucht das Image lokal.
@@ -330,10 +330,9 @@ docker build --provenance=false --sbom=false -t swarm-dashboard:<version> -t swa
 Der `Dockerfile` baut in drei Stufen (Client, Server-Abhängigkeiten, gehärtete Laufzeit auf `node:22-alpine`,
 mit aktuellen OS-Paketen und ohne npm/corepack im Endimage) und führt einen **echten `npm install`** aus —
 damit greifen die `overrides` in `server/package.json` (u. a. `qs`, `uuid`, `proxy-addr`, `@grpc/grpc-js`,
-`ip-address`). Die Registry ist über `--build-arg NPM_REGISTRY=<url>` wählbar; **Standard ist der
-Registry-Mirror**, weil npmjs.org in der Zielumgebung per TLS-Inspektion blockiert ist.
-Außerhalb davon z. B. `--build-arg NPM_REGISTRY=https://registry.npmjs.org/`. Für aktuelle OS-Pakete
-gelegentlich mit `--no-cache` bauen.
+`ip-address`). Die npm-Registry ist über `--build-arg NPM_REGISTRY=<url>` wählbar (Standard:
+`https://registry.npmjs.org/`), z. B. für einen Mirror, wenn die öffentliche Registry nicht erreichbar ist.
+Für aktuelle OS-Pakete gelegentlich mit `--no-cache` bauen.
 
 > `Dockerfile.offline` ist ein **Legacy-Notbehelf** (Basis `swarm-dashboard:1.7.0`, überlagert nur Server-Code
 > und Client). Seine eingefrorenen `node_modules` führten zu veralteten Abhängigkeiten — für Releases nicht verwenden.
@@ -350,9 +349,10 @@ Nach Build, Test und `git push`:
 ```
 
 Das Skript legt das Image als Release **`latest`** auf GitHub ab (`swarm-dashboard-latest.tar` zum Laden mit
-`docker load -i …` und `docker-stack.yml`) und kann es zusätzlich in eine interne Container-Registry kopieren
-(Parameter im Skriptkopf; `-SkipGitHub` bzw. `-SkipGit-Mirror` lassen ein Ziel aus). Die GitHub-Container-Registry
-(`ghcr.io`) ist nicht eingerichtet, da dafür der Token-Scope `write:packages` fehlt.
+`docker load -i …` und `docker-stack.yml`). Optional kopiert es das Image zusätzlich in eine Container-Registry
+Ihrer Wahl (`-RegistryHost`, `-RegistryRepo`, `-RegistryUser`, `-RegistryContext` bzw. die Umgebungsvariablen
+`PUBLISH_REGISTRY_*`, Details im Skriptkopf); `-SkipRegistry` und `-SkipGitHub` lassen ein Ziel aus. Die
+GitHub-Container-Registry (`ghcr.io`) ist nicht eingerichtet, da dafür der Token-Scope `write:packages` fehlt.
 
 ---
 

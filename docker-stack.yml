@@ -3,7 +3,7 @@
 # Variablen (optional, werden von `docker stack deploy` aus der Umgebung ersetzt):
 #   SWARMDASH_IMAGE  Image fuer Dashboard UND Agent   (Standard: swarm-dashboard:latest)
 #   SWARMDASH_PORT   veroeffentlichter Port           (Standard: 3000)
-# Beispiel Registry:  SWARMDASH_IMAGE=registry.example.com/admin/swarm-dashboard:latest \
+# Beispiel Registry:  SWARMDASH_IMAGE=registry.example.com/swarm-dashboard:latest \
 #                     docker stack deploy --with-registry-auth -c docker-stack.yml swarmdash
 version: "3.8"
 

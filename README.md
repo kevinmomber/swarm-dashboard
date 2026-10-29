@@ -1,11 +1,8 @@
 # Swarm Dashboard
 
-Ein Web-Frontend zur Verwaltung von **Docker Swarm** —
-Übersicht, Nodes, Services (skalieren / aktualisieren / entfernen), Stacks
-(deployen / entfernen), Tasks, Ressourcen und **Live-Logs**.
+Ein Web-Frontend zur Verwaltung von **Docker Swarm** — Übersicht, Nodes, Services (skalieren / aktualisieren / entfernen), Stacks (deployen / entfernen), Tasks, Ressourcen und **Live-Logs**.
 
-**Stack:** React + Vite (Frontend) · Node.js + Express + dockerode (Backend) ·
-WebSocket-Log-Streaming.
+**Stack:** React + Vite (Frontend) · Node.js + Express + dockerode (Backend) · WebSocket-Log-Streaming.
 
 ---
 
@@ -158,34 +155,6 @@ Anschließend greift die Aufbewahrungsregel. Läufe erscheinen in der **Backup-H
 
 ---
 
-## Schnellstart (Entwicklung)
-
-Zwei Terminals — das Backend spricht mit Ihrem Docker/Swarm-Endpoint, das
-Frontend läuft über Vite mit Proxy auf das Backend.
-
-```powershell
-# Terminal 1 – Backend (Port 3000)
-cd server
-npm install
-# optional: an einen Remote-Swarm-Manager anbinden
-$env:DOCKER_HOST = "tcp://<manager-ip>:2375"
-npm run dev
-
-# Terminal 2 – Frontend (Port 5173, proxyt /api und /ws auf :3000)
-cd client
-npm install
-npm run dev
-```
-
-Anschließend <http://localhost:5173> öffnen.
-
-> Die lokale Maschine muss kein Swarm-Manager sein. Verwaltungsaktionen
-> funktionieren, sobald das Backend über `DOCKER_HOST` mit einem **Manager-Node**
-> verbunden ist. Ist der Endpoint kein Manager, zeigt das Dashboard einen Hinweis
-> und liefert nur Basisinformationen.
-
----
-
 ## Produktion — im Swarm betreiben (empfohlen)
 
 Container läuft auf einem Manager-Node, der Docker-Socket wird gemountet.
@@ -215,15 +184,7 @@ $env:GITEA_PW = '<Git-Mirror-Passwort>'      # wird nicht gespeichert; sonst Abf
 ```
 
 | Ziel | Ablage |
-|---|---|
-| **Git-Mirror** | Container-Registry `registry.example.com/admin/swarm-dashboard:latest` und `:<Version>` |
 | **GitHub** | Release `latest` mit dem Asset `swarm-dashboard-latest.tar` (`docker load -i …`) |
-
-Die Git-Mirror-Registry nutzt eine interne CA und ist vom Entwicklungsrechner nicht per Name erreichbar.
-Das Skript kopiert das Image deshalb mit `skopeo` aus einem Wegwerf-Container auf der Staging-Node
-(TLS-Prüfung nur für diese Übertragung aus); am Host wird nichts verändert. GitHub-Container-Registry
-(`ghcr.io`) ist nicht eingerichtet, da dafür der Token-Scope `write:packages` fehlt – der Release-Asset
-braucht nur den Scope `repo`. Parameter: `-SkipGit-Mirror`, `-SkipGitHub`, `-Version`.
 
 ---
 
@@ -282,7 +243,4 @@ braucht nur den Scope `repo`. Parameter: `-SkipGit-Mirror`, `-SkipGitHub`, `-Ver
 ## Sicherheitshinweis
 
 Dieses Werkzeug gewährt vollen Zugriff auf den Docker-Socket des Managers
-(= Root-Äquivalent auf dem Host). Es enthält **keine Authentifizierung** —
-betreiben Sie es ausschließlich in einem vertrauenswürdigen, nicht öffentlich
-erreichbaren Netz oder hinter einem Reverse-Proxy mit Auth (z. B. Traefik +
-Basic-Auth / OAuth).
+(= Root-Äquivalent auf dem Host). Es enthält nach dem deplyoment keine **keine Authentifizierung**, diese muss nach dem ersten start konfiguriert werden — die Einrichtung eines Reverse-Proxy mit Auth (z. B. Traefik + Basic-Auth / OAuth) für die veröffentlichten Services (inkl. dem Swarm-Dashboard) wird dringend empfohlen.

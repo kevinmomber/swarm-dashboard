@@ -3,6 +3,7 @@ import { loadSettings, saveSettings, redact, applyPatch } from '../settings.js';
 import { applySchedule } from '../backup.js';
 import { applyMonitoring } from '../monitoring.js';
 
+const THEMES = ['system', 'dark', 'light', 'glass', 'glass-dark', 'midnight', 'nord'];
 const router = Router();
 
 router.get('/', async (req, res, next) => {
@@ -18,7 +19,7 @@ router.put('/', async (req, res, next) => {
     const current = await loadSettings();
     const merged = applyPatch(current, req.body || {});
 
-    if (merged.theme !== 'dark' && merged.theme !== 'light') merged.theme = 'dark';
+    if (!THEMES.includes(merged.theme)) merged.theme = 'dark';
     const t = merged.backup?.target?.type;
     if (t !== 'local' && t !== 'smb') merged.backup.target.type = 'local';
 

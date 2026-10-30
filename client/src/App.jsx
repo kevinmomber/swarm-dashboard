@@ -32,11 +32,12 @@ const NAV = [
 ];
 
 function ThemeToggle() {
-  const { theme, toggle } = useTheme();
+  const { resolved, toggle } = useTheme();
+  const dark = resolved !== 'light' && resolved !== 'glass';
   return (
     <button className="theme-toggle" onClick={toggle}>
-      <span className="ico">{theme === 'dark' ? '☾' : '☀'}</span>
-      {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+      <span className="ico">{dark ? '☾' : '☀'}</span>
+      {dark ? 'Heller Modus' : 'Dunkler Modus'}
     </button>
   );
 }

@@ -20,7 +20,7 @@ export const GROUP_LABEL = 'swarmdash.tag';
 export const MONITOR_LABEL = 'swarmdash.monitor';
 
 const DEFAULTS = {
-  theme: 'dark', // 'dark' | 'light'
+  theme: 'dark', // system | dark | light | glass | glass-dark | midnight | nord
   backup: {
     // Shared destination for all jobs.
     target: {

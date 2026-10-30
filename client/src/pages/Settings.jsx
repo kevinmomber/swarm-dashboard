@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api, postSSE } from '../api.js';
 import { useApi } from '../components/useApi.js';
-import { useTheme } from '../components/theme.jsx';
+import { useTheme, THEMES } from '../components/theme.jsx';
 import { Badge, useToast, bytes, ago, Modal } from '../components/ui.jsx';
 import RestoreModal from '../components/RestoreModal.jsx';
 import AboutSection from '../components/AboutSection.jsx';
@@ -267,12 +267,15 @@ export default function Settings() {
       {section === 'appearance' && (
       <div className="card section">
         <h2>Erscheinungsbild</h2>
-        <div className="form-row">
-          <div className="rl"><div className="t">Theme</div><div className="h">Dark oder Light Mode. Geräteübergreifend gespeichert.</div></div>
-          <div className="seg">
-            <button className={theme === 'dark' ? 'active' : ''} onClick={() => changeTheme('dark')}>☾ Dark</button>
-            <button className={theme === 'light' ? 'active' : ''} onClick={() => changeTheme('light')}>☀ Light</button>
-          </div>
+        <div className="desc">Design des Dashboards. Die Auswahl wird geräteübergreifend gespeichert und wirkt sofort.</div>
+        <div className="theme-grid">
+          {THEMES.map((t) => (
+            <button key={t.id} className={`theme-card ${theme === t.id ? 'active' : ''}`} onClick={() => changeTheme(t.id)}>
+              <span className="theme-swatch" style={{ background: `linear-gradient(135deg, ${t.colors[0]}, ${t.colors[1]} 55%, ${t.colors[2]})` }} />
+              <span className="theme-name">{t.icon} {t.label}</span>
+              <span className="theme-desc">{t.desc}</span>
+            </button>
+          ))}
         </div>
       </div>
       )}

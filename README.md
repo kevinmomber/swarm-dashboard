@@ -125,8 +125,8 @@ docker volume rm swarmdash_swarmdash_data      # Daten (Einstellungen, Benutzer,
 | **Images** | Alle Images je Node, Löschen/Prune/Pull, Download/Upload, **integrierter Builder** (BuildKit, Push in Registry) |
 | **Ressourcen** | **Netzwerke anlegen/bearbeiten/löschen** (overlay, macvlan, ipvlan, IPv6), Volumes (Dateibrowser, Duplizieren, Export/Import, Migration), Bind-Mount-Analyse, Secrets, Configs |
 | **Security** | Trivy-CVE-Scan aller Images mit Score, Best-Practice-Prüfung (Docker-/Host-Härtung) mit Verlauf und Zeitplan, interne **PKI** |
-| **Einstellungen** | Theme · Über & Version/Self-Update · Authentifizierung (Rollen) · Monitoring · Registries & Git · GitOps · Docker-Endpoints · Reverse Proxy (Traefik/nginx) · Tailscale/DockTail · Backup · Secret-Tresor · Audit-Log |
-| **Global** | Befehlspalette **Strg/Cmd + K** (Seiten, Services, Tasks, Volumes, Images, Nodes) · Dark-/Light-Theme |
+| **Einstellungen** | Erscheinungsbild (7 Themes) · Über & Version/Self-Update · Authentifizierung (Rollen) · Monitoring · Registries & Git · GitOps · Docker-Endpoints · Reverse Proxy (Traefik/nginx) · Tailscale/DockTail · Backup · Secret-Tresor · Audit-Log |
+| **Global** | Befehlspalette **Strg/Cmd + K** (Seiten, Services, Tasks, Volumes, Images, Nodes) · Themes: System, Dark, Light, Glass (Liquid-Glass-Stil), Glass Dark, Midnight, Nord |
 
 ---
 

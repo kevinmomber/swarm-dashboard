@@ -445,3 +445,7 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 .theme-swatch { display: block; height: 64px; border-radius: calc(var(--radius) - 4px); border: 1px solid rgba(128,128,128,.3); }
 .theme-name { font-weight: 600; }
 .theme-desc { color: var(--text-dim); font-size: 12px; }
+/* Native Auswahllisten (select): Popup braucht deckende Farben, sonst unleserlich bei Glass */
+select option, select optgroup { background: var(--option-bg, var(--bg-elev)); color: var(--text); }
+:root[data-theme="glass"] { --option-bg: #eef3fc; }
+:root[data-theme="glass-dark"] { --option-bg: #1a2036; }
